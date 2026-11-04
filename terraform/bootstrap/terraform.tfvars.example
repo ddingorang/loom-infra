@@ -1,0 +1,4 @@
+# cp terraform.tfvars.example terraform.tfvars
+aws_account_id    = "123456789012"
+aws_profile       = "loom-main"
+state_bucket_name = "loom-tfstate-change-me"

@@ -1,0 +1,125 @@
+# 이 파일을 group_vars/all.yml로 복사한 뒤, 아래 placeholder 값들을 실제 환경에 맞게 채우세요.
+#   cp group_vars/all.yml.example group_vars/all.yml
+#
+# 비밀번호/키 값은 여기 두지 말고 group_vars/vault.yml(ansible-vault로 암호화)에서 관리합니다.
+#
+# infra_outputs.* 는 terraform/(envs/prod) apply 시 자동 생성되는
+# group_vars/infra_outputs.yml에서 옵니다. AWS 리소스 이름/ID는 여기서 직접 적지 않습니다.
+
+# --- 공통 ---
+app_dir: /opt/loom
+compose_project_name: loom
+
+# =====================================================================
+# AWS 메인 계정 (ECR / S3 / CloudFront / Amplify) — 계정 A, `terraform/`이 관리
+# =====================================================================
+aws_region: ap-northeast-2
+# frontend-deploy.yml(Amplify 배포)을 로컬에서 실행할 때 쓰는 AWS CLI 프로필
+# 빈 값이면 환경변수(AWS_ACCESS_KEY_ID 등) 자격증명을 사용합니다 (Jenkins 등).
+aws_profile: loom-main
+
+# --- ECR (Jenkins가 push하는 백엔드 이미지 저장소) ---
+ecr_repo: "{{ infra_outputs.EcrRepositoryUri | default('') }}"
+ecr_registry: "{{ ecr_repo.split('/') | first }}"
+image_tag: latest   # Jenkins 배포 시 커밋 해시 태그를 pull하고, Ansible 단독 실행 시엔 latest를 사용
+ecr_access_key_id: "{{ vault_ecr_access_key_id }}"           # ECR pull용 (loom-ci 사용자 키)
+ecr_secret_access_key: "{{ vault_ecr_secret_access_key }}"
+
+# --- AI 서버 (FastAPI, 백엔드와 같은 EC2 / 같은 compose 스택) ---
+# 외부 포트를 열지 않고, 백엔드가 compose 내부 네트워크에서 http://ai:{{ ai_port }} 로만 호출합니다.
+# enable_ai가 true여도 ECR에 이미지가 아직 없으면 server.yml이 자동으로 AI 서비스를 건너뜁니다.
+enable_ai: true
+ai_name: loom-ai
+ai_ecr_repo: "{{ infra_outputs.AiEcrRepositoryUri | default('') }}"
+ai_image_tag: latest
+# 컨테이너 내부 포트. backend_ai/Dockerfile의 uvicorn --port 8000과 묶여 있어 이 값만 바꿔도 실제 포트는 안 바뀝니다.
+ai_port: 8000
+ai_debug: "false"
+ai_base_url: "http://ai:{{ ai_port }}"   # 백엔드 컨테이너에 AI_BASE_URL로 주입
+# 퍼스널 컬러 진단 가중치 (팀 레포 ai-models/, 약 950MB). 이미지에 굽지 않고 서버에 복사한 뒤 읽기 전용으로 마운트
+ai_models_src_dir: "{{ playbook_dir }}/../../S15P31A104/ai-models"   # Ansible을 실행하는 머신 기준
+ai_models_dir: "{{ app_dir }}/ai-models"                           # 서버에 복사되는 위치
+ai_models_mount: /models                                           # 컨테이너 안 경로
+ai_color_checkpoint: convnext_base_20261028_v1/best_model.pth      # ai_models_dir 기준 상대 경로 (model_info.json 같은 폴더)
+ai_color_device: cpu   # EC2에 GPU 없음
+
+# --- S3 + CloudFront (이미지 저장/배포) ---
+s3_bucket: "{{ infra_outputs.ImageBucketName | default('') }}"
+# CloudFront 도메인(예: dxxxxxxxx.cloudfront.net). 커스텀 도메인을 붙였다면 그 값으로 덮어쓰세요.
+cloudfront_domain: "{{ infra_outputs.CloudFrontDomainName | default('') }}"
+# 앱 컨테이너가 S3에 업로드할 때 쓰는 IAM 자격증명 (loom-app 사용자 키, ECR 키와 분리)
+s3_access_key_id: "{{ vault_s3_access_key_id }}"
+s3_secret_access_key: "{{ vault_s3_secret_access_key }}"
+
+# --- Amplify (프론트엔드 호스팅, 수동 배포 방식) ---
+# lab.ssafy.com(자체 호스팅 GitLab)은 Amplify Git 연동을 지원하지 않으므로
+# 빌드 결과(dist)를 zip으로 올리는 수동 배포(create-deployment) 방식을 사용합니다.
+amplify_app_id: "{{ infra_outputs.AmplifyAppId | default('') }}"
+amplify_branch: main   # `terraform/`의 amplify_branch와 같아야 함
+# 커스텀 도메인(terraform/ domain_name)이 있으면 그 주소, 없으면 Amplify 기본 주소
+frontend_url: "{{ infra_outputs.FrontendUrl | default(infra_outputs.AmplifyBranchUrl) | default('') }}"
+# 프론트 소스 경로 (frontend-deploy.yml을 실행하는 머신 기준)
+frontend_src_dir: "{{ playbook_dir }}/../../S15P31A104/frontend"
+frontend_build: true          # false면 이미 빌드된 dist를 그대로 업로드
+# Vite 빌드 타임 환경변수 (VITE_ 접두사만 클라이언트 번들에 포함됨)
+frontend_build_env:
+  # 백엔드 컨트롤러가 /api/** 로 받으므로 /api 까지 포함 (frontend/Jenkinsfile과 같은 값)
+  VITE_API_BASE_URL: "{{ 'https://' + domain_name + '/api' if domain_name else '' }}"   # domain_name(아래 HTTPS 섹션) 기준
+  VITE_IMAGE_BASE_URL: "{{ 'https://' + cloudfront_domain if cloudfront_domain else '' }}"
+
+# --- CORS (백엔드 CORS_ALLOWED_ORIGINS) ---
+# Amplify 기본 도메인과 커스텀 도메인(`terraform/`이 FrontendOrigins로 전달)은 자동 포함됩니다.
+# 로컬 개발 서버 등 추가 오리진만 적어주세요.
+# S3 버킷 CORS는 `terraform/`의 extra_cors_origins가 담당하니 두 곳을 같이 맞춰주세요.
+extra_cors_origins:
+  - http://localhost:5173
+cors_allowed_origins: "{{ (infra_outputs.FrontendOrigins | default([frontend_url] if frontend_url else [])) + extra_cors_origins }}"
+
+# =====================================================================
+# RDS PostgreSQL — 계정 B (별도 AWS 계정, 이 playbook은 생성하지 않고 접속만 함)
+# =====================================================================
+# RDS와 보안그룹은 계정 B에 이미 구성되어 있음 (docs/RDS.md)
+db_host: loom-db.xxxxxxxxxxxx.ap-northeast-2.rds.amazonaws.com
+db_port: 5432
+db_name: loom
+db_user: loom
+db_password: "{{ vault_db_password }}"
+db_sslmode: require   # 외부 계정 RDS에 인터넷 경유로 붙으므로 TLS 필수
+db_jdbc_url: "jdbc:postgresql://{{ db_host }}:{{ db_port }}/{{ db_name }}?sslmode={{ db_sslmode }}"
+check_db_connectivity: true   # 배포 전 EC2 -> RDS 포트 도달 여부 확인
+
+# =====================================================================
+# EC2 서버 (Spring Boot + Nginx + Jenkins)
+# =====================================================================
+# --- Spring Boot 애플리케이션 ---
+app_name: loom-backend
+app_port: 8080          # 127.0.0.1에만 바인딩, Nginx 경유로만 접근
+spring_profile: prod
+jwt_secret: "{{ vault_jwt_secret }}"
+cookie_secure: "true"   # HTTPS 운영 환경이므로 true. 아직 TLS 없으면 false로.
+
+# --- Redis (refresh token · 소셜 가입 signupToken, compose 내부 전용) ---
+# ElastiCache는 같은 VPC에서만 접속 가능한데 EC2가 SSAFY 제공 인스턴스(계정 A VPC 밖)라 쓸 수 없어 컨테이너로 운영
+redis_image: redis:7.4-alpine        # 팀 레포 backend/compose*.yaml 과 같은 버전
+redis_password: "{{ vault_redis_password }}"
+redis_maxmemory: 256mb
+redis_data_dir: "{{ app_dir }}/redis-data"   # AOF 저장 위치 (컨테이너 /data)
+
+# --- Jenkins ---
+jenkins_port: 9090
+jenkins_jdk_package: openjdk-21-jdk   # 백엔드가 Java 21
+# Jenkins에서 프론트를 빌드해 Amplify로 배포하려면 Node.js와 Ansible이 서버에 필요합니다.
+jenkins_install_nodejs: true
+nodejs_major_version: 22
+
+# --- Nginx (리버스 프록시: {{ nginx_port }} -> 127.0.0.1:{{ app_port }}) ---
+nginx_port: 80
+nginx_server_name: "{{ domain_name if domain_name else '_' }}"
+
+# --- HTTPS (Let's Encrypt / certbot) ---
+# 프론트는 Amplify가 HTTPS를 제공하므로, 여기 domain_name은 "API 서버" 도메인입니다.
+# (예: api.loom.example.com, A 레코드가 이 EC2 퍼블릭 IP를 가리켜야 함 — `terraform/`이 Route 53에 생성)
+# Amplify(HTTPS) 페이지에서 HTTP API를 호출하면 mixed content로 막히므로 사실상 필수입니다.
+domain_name: ""
+certbot_email: ""
+enable_https: "{{ domain_name | length > 0 }}"

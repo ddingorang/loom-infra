@@ -1,0 +1,14 @@
+# {{ ansible_managed }}
+# 운영 Redis (refresh token · 소셜 가입 signupToken). compose 내부 네트워크에서만 접근, 호스트 포트 없음.
+# 비밀번호가 docker inspect · ps 에 보이지 않도록 명령줄 인자 대신 이 파일(0600)로 전달합니다.
+
+requirepass {{ redis_password }}
+
+# 영속: AOF. Redis 데이터가 날아가면 전원 재로그인 (DECISIONS #87)
+appendonly yes
+appendfsync everysec
+dir /data
+
+# 세션 키가 메모리 부족으로 밀려나면 안 되므로 축출하지 않고 쓰기를 거부
+maxmemory {{ redis_maxmemory }}
+maxmemory-policy noeviction

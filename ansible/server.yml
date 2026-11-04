@@ -1,0 +1,695 @@
+---
+# EC2 한 대에 Docker / Jenkins / Nginx를 설치하고, ECR의 백엔드 이미지를 pull해서 띄웁니다.
+# DB는 다른 AWS 계정(계정 B)의 RDS를 사용하므로 이 서버에는 DB 컨테이너가 없습니다.
+#
+#   ansible-playbook server.yml --ask-vault-pass
+- name: Loom - EC2 서버에 Spring 백엔드, Nginx, Jenkins 구축
+  hosts: loom_server
+  become: true
+
+  vars_files:
+    - group_vars/all.yml
+    - group_vars/vault.yml
+    - - group_vars/infra_outputs.yml
+      - group_vars/infra_outputs.yml.example
+
+  tasks:
+    # ---------- 0. 사전 검증 ----------
+    # 항목별로 확인해 어느 값이 비었는지 바로 보이게 합니다 (값 자체는 출력하지 않음)
+    - name: "필수 설정값 확인"
+      assert:
+        that: item.ok | bool
+        fail_msg: "{{ item.name }} 값을 채워주세요 ({{ item.rule }}, 현재 {{ item.len }}자)"
+        quiet: true
+      loop:
+        - { name: db_host, rule: "필수", len: "{{ db_host | default('') | length }}", ok: "{{ (db_host | default('') | length) > 0 }}" }
+        - { name: vault_db_password, rule: "필수", len: "{{ db_password | length }}", ok: "{{ (db_password | length) > 0 }}" }
+        - { name: vault_jwt_secret, rule: "필수", len: "{{ jwt_secret | length }}", ok: "{{ (jwt_secret | length) > 0 }}" }
+        - { name: vault_verification_secret, rule: "32자 이상", len: "{{ verification_secret | length }}", ok: "{{ (verification_secret | length) >= 32 }}" }
+        - { name: vault_redis_password, rule: "필수", len: "{{ redis_password | length }}", ok: "{{ (redis_password | length) > 0 }}" }
+        - { name: vault_mail_username, rule: "필수", len: "{{ mail_username | length }}", ok: "{{ (mail_username | length) > 0 }}" }
+        - { name: vault_mail_password, rule: "필수", len: "{{ mail_password | length }}", ok: "{{ (mail_password | length) > 0 }}" }
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Terraform 출력값(ECR / S3 / CloudFront) 확인
+      assert:
+        that:
+          - ecr_repo | length > 0
+          - s3_bucket | length > 0
+          - cloudfront_domain | length > 0
+        fail_msg: >-
+          group_vars/infra_outputs.yml이 없거나 비어 있습니다.
+          terraform/envs/prod에서 terraform apply를 먼저 실행하세요.
+
+    # ---------- 1. 기본 패키지 & Docker 설치 ----------
+    - name: apt 캐시 갱신
+      apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 필수 패키지 설치
+      apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+          - dirmngr
+          - lsb-release
+          - unzip
+        state: present
+
+    - name: dpkg 아키텍처 확인 (amd64/arm64 등 apt 표준 표기)
+      command: dpkg --print-architecture
+      register: dpkg_arch
+      changed_when: false
+
+    - name: Docker GPG 키 디렉토리 생성
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Docker GPG 키 등록
+      shell: |
+        set -o pipefail
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --batch --yes --dearmor -o /etc/apt/keyrings/docker.gpg
+      args:
+        executable: /bin/bash
+        creates: /etc/apt/keyrings/docker.gpg
+
+    - name: Docker apt 저장소 등록
+      apt_repository:
+        repo: >-
+          deb [arch={{ dpkg_arch.stdout }} signed-by=/etc/apt/keyrings/docker.gpg]
+          https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable
+        state: present
+        filename: docker
+
+    - name: Docker Engine 및 Compose 플러그인 설치
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin      # Dockerfile의 RUN --mount(BuildKit) 사용
+          - docker-compose-plugin
+        state: present
+        update_cache: true
+
+    - name: Docker 서비스 활성화 및 실행
+      systemd:
+        name: docker
+        enabled: true
+        state: started
+
+    - name: ansible_user를 docker 그룹에 추가
+      user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: true
+
+    # ---------- 2. Jenkins 설치 (백엔드 이미지 빌드 → ECR push, 프론트 빌드 → Amplify 배포) ----------
+    - name: Jenkins용 JDK 설치
+      apt:
+        name: "{{ jenkins_jdk_package }}"
+        state: present
+
+    - name: root GnuPG 홈 디렉토리 준비 (없으면 dirmngr 연결 실패)
+      file:
+        path: /root/.gnupg
+        state: directory
+        mode: "0700"
+        owner: root
+        group: root
+
+    - name: dirmngr 데몬 기동
+      command: gpgconf --launch dirmngr
+      changed_when: false
+
+    - name: Jenkins GPG 키를 Ubuntu 키서버에서 가져오기 (pkg.jenkins.io 직접 다운로드보다 안정적)
+      command: >
+        gpg --no-default-keyring --keyring /usr/share/keyrings/jenkins-keyring.gpg
+        --keyserver hkps://keyserver.ubuntu.com --recv-keys 7198F4B714ABFC68
+      register: jenkins_gpg_import
+      retries: 3
+      delay: 5
+      until: jenkins_gpg_import.rc == 0
+      changed_when: "'imported' in jenkins_gpg_import.stderr"
+
+    - name: Jenkins keyring 파일이 정상적으로 생성됐는지 확인
+      stat:
+        path: /usr/share/keyrings/jenkins-keyring.gpg
+      register: jenkins_keyring_stat
+
+    - name: keyring 파일 크기 검증 (0바이트면 키 가져오기 실패)
+      assert:
+        that:
+          - jenkins_keyring_stat.stat.exists
+          - jenkins_keyring_stat.stat.size > 0
+        fail_msg: "Jenkins GPG 키 가져오기에 실패했습니다. EC2에서 keyserver.ubuntu.com(443)으로 아웃바운드 연결이 되는지 확인하세요."
+
+    - name: Jenkins apt 저장소 등록
+      apt_repository:
+        repo: >-
+          deb [signed-by=/usr/share/keyrings/jenkins-keyring.gpg]
+          https://pkg.jenkins.io/debian-stable binary/
+        state: present
+        filename: jenkins
+
+    # 설치보다 먼저 써둬야 패키지 설치 직후 첫 기동부터 {{ jenkins_port }}로 뜹니다.
+    # (나중에 쓰면 기본 8080으로 먼저 떠서 백엔드 포트와 충돌)
+    - name: Jenkins systemd 오버라이드 디렉토리 생성
+      file:
+        path: /etc/systemd/system/jenkins.service.d
+        state: directory
+        mode: "0755"
+
+    - name: Jenkins 포트/컨텍스트 경로 오버라이드 설정 ({{ jenkins_port }}, /jenkins)
+      copy:
+        dest: /etc/systemd/system/jenkins.service.d/override.conf
+        mode: "0644"
+        content: |
+          [Service]
+          Environment="JENKINS_PORT={{ jenkins_port }}"
+          Environment="JENKINS_PREFIX=/jenkins"
+      notify: restart jenkins
+
+    - name: Jenkins 설치
+      apt:
+        name: jenkins
+        state: present
+        update_cache: true
+
+    - name: Jenkins 서비스 활성화 및 실행
+      systemd:
+        name: jenkins
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Jenkins가 Docker 명령을 쓸 수 있도록 docker 그룹에 추가
+      user:
+        name: jenkins
+        groups: docker
+        append: true
+      notify: restart jenkins
+
+    # 대기 중인 재시작(오버라이드/그룹 변경)을 지금 반영합니다. 끝까지 미루면 중간 실패 시 영영 실행되지 않습니다.
+    - name: 대기 중인 핸들러 즉시 실행 (Jenkins 재시작)
+      meta: flush_handlers
+
+    # 이전 실행에서 기본 8080으로 떠버린 경우 오버라이드 파일이 이미 같아 notify가 다시 안 걸리므로 직접 확인
+    - name: Jenkins가 {{ jenkins_port }} 포트로 동작 중인지 확인
+      wait_for:
+        port: "{{ jenkins_port }}"
+        timeout: 5
+      register: jenkins_port_check
+      ignore_errors: true
+
+    - name: 포트가 다르면 Jenkins 재시작
+      systemd:
+        name: jenkins
+        state: restarted
+        daemon_reload: true
+      when: jenkins_port_check is failed
+
+    - name: Jenkins 기동 대기 ({{ jenkins_port }})
+      wait_for:
+        port: "{{ jenkins_port }}"
+        timeout: 180
+
+    # ---------- 2-1. 프론트 빌드/배포 도구 (Jenkins에서 frontend-deploy.yml 실행용) ----------
+    - name: NodeSource 저장소 설정 스크립트 실행 (Node.js {{ nodejs_major_version }}.x)
+      shell: |
+        set -o pipefail
+        curl -fsSL https://deb.nodesource.com/setup_{{ nodejs_major_version }}.x | bash -
+      args:
+        executable: /bin/bash
+        creates: /etc/apt/sources.list.d/nodesource.list
+      when: jenkins_install_nodejs | bool
+
+    - name: Node.js / Ansible / zip 설치 (Jenkins에서 frontend-deploy.yml 실행용)
+      apt:
+        name:
+          - nodejs
+          - ansible
+          - zip
+        state: present
+        update_cache: true
+      when: jenkins_install_nodejs | bool
+
+    # ---------- 3. Nginx 설치 (API 리버스 프록시) ----------
+    - name: Nginx 설치
+      apt:
+        name: nginx
+        state: present
+
+    - name: Nginx 기본 사이트 비활성화
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+
+    # ---------- 3-1. HTTPS(Let's Encrypt) 인증서 준비 ----------
+    - name: Certbot 설치
+      apt:
+        name: certbot
+        state: present
+      when: enable_https | bool
+
+    - name: ACME 챌린지용 webroot 디렉토리 생성
+      file:
+        path: /var/www/certbot
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: "0755"
+      when: enable_https | bool
+
+    - name: 기존 Let's Encrypt 인증서 존재 여부 확인
+      stat:
+        path: "/etc/letsencrypt/live/{{ domain_name }}/fullchain.pem"
+      register: letsencrypt_cert_stat
+      when: enable_https | bool
+
+    - name: 인증서 존재 여부 기록
+      set_fact:
+        https_cert_exists: "{{ (enable_https | bool) and (letsencrypt_cert_stat.stat.exists | default(false)) }}"
+
+    - name: "Nginx 리버스 프록시 설정 배포 (인증서 발급 전: HTTP + ACME 챌린지만 우선 적용)"
+      template:
+        src: templates/nginx-loom.conf.j2
+        dest: /etc/nginx/sites-available/loom.conf
+        mode: "0644"
+      notify: reload nginx
+
+    - name: Nginx 사이트 활성화 (심볼릭 링크)
+      file:
+        src: /etc/nginx/sites-available/loom.conf
+        dest: /etc/nginx/sites-enabled/loom.conf
+        state: link
+      notify: reload nginx
+
+    - name: Nginx 설정 문법 검사
+      command: nginx -t
+      changed_when: false
+
+    - name: Nginx 서비스 활성화 및 실행
+      systemd:
+        name: nginx
+        enabled: true
+        state: started
+
+    # notify에 의존하지 않고 항상 리로드합니다. (이전 실행이 certbot 단계에서 실패하면
+    # 대기 중이던 핸들러가 실행되지 않고, 다음 실행에선 changed=false라 리로드가 영영 안 되는 문제 방지)
+    - name: Nginx 강제 리로드 (ACME 챌린지 설정이 실제로 적용된 뒤 인증서 발급을 시도해야 함)
+      systemd:
+        name: nginx
+        state: reloaded
+
+    # DNS가 아직 이 서버를 가리키지 않으면 발급을 시도하지 않습니다.
+    # (실패한 검증도 Let's Encrypt 요청 한도(호스트당 시간당 5회)에 포함되므로 헛시도를 막음)
+    - name: 이 서버의 퍼블릭 IP 확인
+      uri:
+        url: https://checkip.amazonaws.com
+        return_content: true
+      register: https_public_ip
+      when: (enable_https | bool) and not https_cert_exists
+
+    - name: "{{ domain_name }} DNS 조회"
+      command: getent ahostsv4 {{ domain_name }}
+      register: https_domain_lookup
+      changed_when: false
+      failed_when: false
+      when: (enable_https | bool) and not https_cert_exists
+
+    - name: DNS가 이 서버를 가리키는지 판단
+      set_fact:
+        https_dns_ready: >-
+          {{ (https_public_ip.content | default('') | trim) in
+             (https_domain_lookup.stdout | default('')).split() }}
+      when: (enable_https | bool) and not https_cert_exists
+
+    - name: Let's Encrypt 인증서 발급 (최초 1회, webroot 방식)
+      command: >
+        certbot certonly --webroot -w /var/www/certbot
+        -d {{ domain_name }}
+        --non-interactive --agree-tos -m {{ certbot_email }}
+        --keep-until-expiring
+      register: certbot_issue
+      changed_when: "'Successfully received certificate' in certbot_issue.stdout"
+      # 발급에 실패해도 HTTP로는 계속 서비스되므로 배포는 이어서 진행하고, 아래에서 경고만 출력
+      failed_when: false
+      when: (enable_https | bool) and not https_cert_exists and (https_dns_ready | default(false) | bool)
+
+    - name: HTTPS 미적용 경고
+      debug:
+        msg:
+          - "HTTPS 인증서를 발급하지 못해 이번 배포는 HTTP로만 서비스합니다."
+          - >-
+            {{ ('DNS: ' + domain_name + ' → ' + ((https_domain_lookup.stdout | default('')).split() | first | default('조회 실패')) +
+                ', 이 서버 IP는 ' + (https_public_ip.content | default('') | trim) + '. DNS A 레코드를 이 IP로 등록한 뒤 다시 실행하세요.')
+               if not (https_dns_ready | default(false) | bool)
+               else ('certbot 오류: ' + (certbot_issue.stdout | default('') | regex_replace('\n+', ' ') | truncate(400))) }}
+      when: >-
+        (enable_https | bool) and not https_cert_exists
+        and (not (https_dns_ready | default(false) | bool) or (certbot_issue.rc | default(0)) != 0)
+
+    - name: 인증서 갱신 시 Nginx 자동 리로드 훅 등록
+      copy:
+        dest: /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+        mode: "0755"
+        content: |
+          #!/bin/sh
+          systemctl reload nginx
+      when: enable_https | bool
+
+    - name: 발급 직후 인증서 생성 여부 재확인
+      stat:
+        path: "/etc/letsencrypt/live/{{ domain_name }}/fullchain.pem"
+      register: letsencrypt_cert_stat_after
+      when: (enable_https | bool) and not https_cert_exists
+
+    # 블록의 when은 블록 안 작업마다 다시 평가됩니다. 조건에 https_cert_exists를 직접 쓰면
+    # 첫 작업에서 true로 바꾸는 순간 나머지(설정 재배포·리로드)가 건너뛰어지므로 별도 값으로 고정합니다.
+    - name: 이번 실행에서 인증서가 새로 발급됐는지 기록
+      set_fact:
+        https_newly_issued: >-
+          {{ (enable_https | bool) and not https_cert_exists
+             and (letsencrypt_cert_stat_after.stat.exists | default(false)) }}
+
+    - name: 인증서 발급 직후 HTTPS 포함 설정으로 재배포 + 즉시 적용
+      when: https_newly_issued | bool
+      block:
+        # task vars로 넘기면 위에서 set_fact한 값(false)이 우선순위가 더 높아 무시되므로 set_fact로 갱신
+        - name: 인증서 발급 완료 기록
+          set_fact:
+            https_cert_exists: true
+
+        - name: Nginx 설정 재배포 (HTTPS 포함)
+          template:
+            src: templates/nginx-loom.conf.j2
+            dest: /etc/nginx/sites-available/loom.conf
+            mode: "0644"
+
+        - name: Nginx 설정 문법 검사 (HTTPS 적용 후)
+          command: nginx -t
+          changed_when: false
+
+        - name: Nginx 강제 리로드 (HTTPS 설정 즉시 적용)
+          systemd:
+            name: nginx
+            state: reloaded
+
+    # ---------- 4. 방화벽(UFW) 설정 ----------
+    # 앱(8080)·Jenkins(9090)는 열지 않습니다. 모두 Nginx 경유로만 접근합니다.
+    - name: UFW 설치 확인
+      apt:
+        name: ufw
+        state: present
+
+    - name: SSH(22) / HTTP({{ nginx_port }}) 허용
+      ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+      loop:
+        - "22"
+        - "{{ nginx_port }}"
+
+    - name: HTTPS(443) 포트 허용
+      ufw:
+        rule: allow
+        port: "443"
+        proto: tcp
+      when: enable_https | bool
+
+    - name: UFW 활성화
+      ufw:
+        state: enabled
+        policy: deny
+
+    # ---------- 5. RDS(계정 B) 연결 확인 ----------
+    # 다른 계정 RDS에 인터넷 경유로 붙으므로, RDS 보안그룹에 이 EC2의 퍼블릭 IP가 허용돼 있어야 합니다.
+    - name: EC2 퍼블릭 IP 확인 (RDS 보안그룹 허용 대상)
+      uri:
+        url: https://checkip.amazonaws.com
+        return_content: true
+      register: ec2_public_ip
+      changed_when: false
+      failed_when: false
+      when: check_db_connectivity | bool
+
+    - name: EC2 -> RDS({{ db_host }}:{{ db_port }}) 포트 도달 확인
+      wait_for:
+        host: "{{ db_host }}"
+        port: "{{ db_port }}"
+        timeout: 10
+      register: db_reachable
+      ignore_errors: true
+      when: check_db_connectivity | bool
+
+    - name: RDS 연결 실패 시 중단
+      fail:
+        msg: >-
+          RDS({{ db_host }}:{{ db_port }})에 연결할 수 없습니다.
+          계정 B의 RDS가 '퍼블릭 액세스 가능'인지, RDS 보안그룹 인바운드에
+          {{ (ec2_public_ip.content | default('<EC2 퍼블릭 IP>')) | trim }}/32 (TCP {{ db_port }})가 허용돼 있는지 확인하세요.
+          (docs/RDS.md 참고, 확인을 건너뛰려면 check_db_connectivity: false)
+      when: (check_db_connectivity | bool) and (db_reachable is failed)
+
+    # ---------- 6. 배포 디렉토리 준비 ----------
+    - name: 애플리케이션 디렉토리 생성
+      file:
+        path: "{{ app_dir }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0755"
+
+    # ---------- 7. ECR 로그인 (앱 이미지 pull용) ----------
+    - name: AWS CLI 설치 여부 확인
+      command: aws --version
+      register: awscli_check
+      changed_when: false
+      failed_when: false
+
+    # apt의 awscli 패키지는 배포판에 따라 없을 수 있어 AWS 공식 설치 파일로 설치
+    - name: AWS CLI v2 설치
+      when: awscli_check.rc != 0
+      block:
+        - name: AWS CLI v2 설치 파일 다운로드
+          get_url:
+            url: "https://awscli.amazonaws.com/awscli-exe-linux-{{ 'aarch64' if dpkg_arch.stdout == 'arm64' else 'x86_64' }}.zip"
+            dest: /tmp/awscliv2.zip
+            mode: "0644"
+
+        - name: AWS CLI v2 설치 파일 압축 해제
+          unarchive:
+            src: /tmp/awscliv2.zip
+            dest: /tmp
+            remote_src: true
+
+        - name: AWS CLI v2 설치 실행
+          command: /tmp/aws/install
+
+    - name: ECR 로그인 (Docker가 {{ ecr_registry }}에서 이미지를 pull할 수 있도록)
+      shell: |
+        set -o pipefail
+        aws ecr get-login-password --region {{ aws_region }} | docker login --username AWS --password-stdin {{ ecr_registry }}
+      args:
+        executable: /bin/bash
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ ecr_access_key_id }}"
+        AWS_SECRET_ACCESS_KEY: "{{ ecr_secret_access_key }}"
+      changed_when: false
+      no_log: true
+
+    # ---------- 7-1. AI 서버 이미지 존재 여부 확인 ----------
+    # ECR에 이미지가 없는데 compose에 ai 서비스를 넣으면 pull 실패로 백엔드까지 배포가 중단되므로,
+    # 이미지가 확인될 때만 ai 서비스를 포함합니다. (최초 push 전에도 백엔드는 정상 배포)
+    - name: AI 서버 이미지 확인 ({{ ai_ecr_repo }}:{{ ai_image_tag }})
+      command: >
+        aws ecr describe-images --region {{ aws_region }}
+        --repository-name {{ ai_ecr_repo.split('/', 1) | last }}
+        --image-ids imageTag={{ ai_image_tag }}
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ ecr_access_key_id }}"
+        AWS_SECRET_ACCESS_KEY: "{{ ecr_secret_access_key }}"
+      register: ai_image_check
+      changed_when: false
+      failed_when: false
+      when: (enable_ai | bool) and (ai_ecr_repo | length > 0)
+
+    - name: AI 서버 배포 여부 결정
+      set_fact:
+        ai_enabled: "{{ (enable_ai | bool) and (ai_image_check.rc | default(1)) == 0 }}"
+
+    - name: AI 서버 건너뜀 안내
+      debug:
+        msg: >-
+          ECR에 {{ ai_ecr_repo or 'loom-ai' }}:{{ ai_image_tag }} 이미지가 없어 AI 서버는 이번 배포에서 제외합니다.
+          이미지를 push한 뒤 server.yml을 다시 실행하세요.
+      when: (enable_ai | bool) and not (ai_enabled | bool)
+
+    # ---------- 7-2. AI 모델 가중치 복사 ----------
+    # 팀 레포 ai-models/를 서버로 복사합니다. 최초 1회 약 950MB 업로드, 이후에는 바뀐 파일만 전송합니다.
+    - name: 로컬 AI 모델 폴더 확인 ({{ ai_models_src_dir }})
+      stat:
+        path: "{{ ai_models_src_dir }}/{{ ai_color_checkpoint }}"
+      delegate_to: localhost
+      become: false
+      register: ai_models_src
+      when: ai_enabled | bool
+
+    - name: AI 모델 폴더가 없으면 중단
+      assert:
+        that: ai_models_src.stat.exists
+        fail_msg: >-
+          {{ ai_models_src_dir }}/{{ ai_color_checkpoint }} 이 없습니다.
+          팀 레포를 최신으로 pull 하거나 group_vars/all.yml의 ai_models_src_dir 경로를 확인하세요.
+      when: ai_enabled | bool
+
+    - name: AI 모델 가중치 복사 ({{ ai_models_dir }})
+      copy:
+        src: "{{ ai_models_src_dir }}/"
+        dest: "{{ ai_models_dir }}/"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0644"
+        directory_mode: "0755"
+      when: ai_enabled | bool
+
+    # ---------- 8. docker-compose / 환경변수 파일 배치 ----------
+    - name: docker-compose.yml 템플릿 배포
+      template:
+        src: templates/docker-compose.yml.j2
+        dest: "{{ app_dir }}/docker-compose.yml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0644"
+
+    - name: .env 파일 배포 (docker-compose의 ECR_REPO/IMAGE_TAG 변수 치환용)
+      template:
+        src: templates/env.j2
+        dest: "{{ app_dir }}/.env"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0644"
+
+    # DB 비밀번호/S3 키 등 민감 값은 compose 파일이 아니라 권한 제한된 env 파일로 분리합니다.
+    - name: app.env 파일 배포 (Spring 컨테이너 환경변수)
+      template:
+        src: templates/app.env.j2
+        dest: "{{ app_dir }}/app.env"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0600"
+      no_log: true
+
+    - name: ai.env 파일 배포 (AI 서버 컨테이너 환경변수)
+      template:
+        src: templates/ai.env.j2
+        dest: "{{ app_dir }}/ai.env"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0600"
+      when: ai_enabled | bool
+      no_log: true   # DATABASE_URL에 DB 비밀번호 포함
+
+    # Redis 컨테이너는 redis 사용자(uid 999)로 동작하므로 설정 파일 소유자를 999로 둡니다 (0600: 비밀번호 포함)
+    - name: redis.conf 배포 (Redis 비밀번호 · AOF)
+      template:
+        src: templates/redis.conf.j2
+        dest: "{{ app_dir }}/redis.conf"
+        owner: "999"
+        group: "999"
+        mode: "0600"
+      no_log: true
+      register: redis_conf
+
+    - name: Redis 데이터 디렉토리 생성
+      file:
+        path: "{{ redis_data_dir }}"
+        state: directory
+        owner: "999"
+        group: "999"
+        mode: "0700"
+
+    # ---------- 8-1. Jenkins 배포 스크립트 ----------
+    # Jenkins는 이 스크립트 하나만 sudo로 실행해 컨테이너를 교체합니다 (env 파일 권한은 그대로 0600).
+    - name: Jenkins 배포 스크립트 설치 (/usr/local/bin/loom-deploy)
+      template:
+        src: templates/loom-deploy.sh.j2
+        dest: /usr/local/bin/loom-deploy
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: jenkins 사용자에게 배포 스크립트 sudo 권한만 부여
+      copy:
+        dest: /etc/sudoers.d/jenkins-loom-deploy
+        content: "jenkins ALL=(root) NOPASSWD: /usr/local/bin/loom-deploy\n"
+        owner: root
+        group: root
+        mode: "0440"
+        validate: visudo -cf %s
+
+    # ---------- 9. 컨테이너 기동 ----------
+    - name: 컨테이너 기동 (최신 이미지 pull 후 변경 사항 반영)
+      community.docker.docker_compose_v2:
+        project_src: "{{ app_dir }}"
+        state: present
+        pull: always
+        remove_orphans: true   # compose에서 빠진 서비스(예: enable_ai=false) 컨테이너 정리
+
+    # 설정 파일은 바인드 마운트라 내용만 바뀌면 compose가 재생성하지 않으므로 직접 재시작
+    - name: redis.conf 변경 시 Redis 재시작
+      command: docker restart {{ compose_project_name }}-redis
+      when: redis_conf is changed
+
+    - name: 사용하지 않는 이전 이미지 정리
+      community.docker.docker_prune:
+        images: true
+        images_filters:
+          dangling: true
+
+    - name: 컨테이너 상태 확인
+      command: docker compose -f {{ app_dir }}/docker-compose.yml ps
+      register: compose_status
+      changed_when: false
+
+    - name: 컨테이너 상태 출력
+      debug:
+        var: compose_status.stdout_lines
+
+    # ---------- 10. 접속 정보 ----------
+    - name: Jenkins 초기 관리자 비밀번호 조회
+      command: cat /var/lib/jenkins/secrets/initialAdminPassword
+      register: jenkins_initial_password
+      changed_when: false
+      failed_when: false
+
+    - name: 접속 정보 출력
+      vars:
+        base_url: "{{ 'https://' + domain_name if (enable_https | bool) else 'http://' + (ansible_host | default(inventory_hostname)) + ':' + (nginx_port | string) }}"
+      debug:
+        msg:
+          - "API URL: {{ base_url }}"
+          - "AI 서버: {{ ('내부 전용 ' + ai_base_url) if (ai_enabled | bool) else '미배포' }}"
+          - "Jenkins URL: {{ base_url }}/jenkins/"
+          - "Jenkins 초기 관리자 비밀번호: {{ jenkins_initial_password.stdout | default('') or '아직 생성되지 않음(또는 이미 초기 설정 완료)' }}"
+          - "이미지 CDN: {{ 'https://' + cloudfront_domain if cloudfront_domain else '(미설정)' }}"
+          - "프론트(Amplify): {{ frontend_url or '(미설정)' }}"
+
+  handlers:
+    - name: restart jenkins
+      systemd:
+        name: jenkins
+        state: restarted
+        daemon_reload: true
+
+    - name: reload nginx
+      systemd:
+        name: nginx
+        state: reloaded

@@ -1,0 +1,7 @@
+---
+# 서버 구성 + 프론트 배포를 순서대로 실행합니다.
+# AWS 리소스(ECR / S3 / CloudFront / Amplify / IAM)는 `terraform/`에서 먼저 apply 하세요.
+#
+#   ansible-playbook site.yml --ask-vault-pass
+- import_playbook: server.yml
+- import_playbook: frontend-deploy.yml

@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# {{ ansible_managed }}
+#
+# Jenkins 배포용 컨테이너 교체 스크립트.
+#   sudo /usr/local/bin/loom-deploy <app|ai> <이미지 태그>
+#
+# Jenkins는 sudoers에서 이 스크립트 하나만 root로 실행할 수 있습니다.
+# (app.env/ai.env가 0600이라 jenkins 사용자가 직접 compose를 실행할 수 없음)
+#
+# 이미지는 호출 전에 같은 Docker 데몬에 있어야 합니다(Jenkins가 빌드했거나 ECR에서 pull).
+# health 확인에 실패하면 이전 태그로 되돌리고 실패(exit 1)로 끝납니다.
+set -euo pipefail
+
+APP_DIR="{{ app_dir }}"
+APP_PORT="{{ app_port }}"
+HEALTH_TIMEOUT=180
+
+usage() {
+  echo "usage: $0 <app|ai> <image-tag>" >&2
+  exit 2
+}
+
+[ $# -eq 2 ] || usage
+SERVICE="$1"
+TAG="$2"
+
+case "$SERVICE" in
+  app) TAG_VAR=IMAGE_TAG;    REPO_VAR=ECR_REPO ;;
+  ai)  TAG_VAR=AI_IMAGE_TAG; REPO_VAR=AI_ECR_REPO ;;
+  *)   usage ;;
+esac
+
+# root로 실행되는 스크립트라 인자를 엄격하게 제한
+if ! [[ "$TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
+  echo "잘못된 태그: $TAG" >&2
+  exit 2
+fi
+
+cd "$APP_DIR"
+compose() { docker compose -f "$APP_DIR/docker-compose.yml" "$@"; }
+
+if ! compose config --services | grep -qx "$SERVICE"; then
+  echo "docker-compose.yml에 '$SERVICE' 서비스가 없습니다. Ansible server.yml을 먼저 실행하세요." >&2
+  exit 1
+fi
+
+REPO="$(grep -E "^${REPO_VAR}=" .env | cut -d= -f2-)"
+PREV_TAG="$(grep -E "^${TAG_VAR}=" .env | cut -d= -f2-)"
+
+if ! docker image inspect "${REPO}:${TAG}" >/dev/null 2>&1; then
+  echo "로컬에 ${REPO}:${TAG} 이미지가 없습니다." >&2
+  exit 1
+fi
+
+set_tag() { sed -i -E "s|^${TAG_VAR}=.*|${TAG_VAR}=$1|" .env; }
+
+up() { compose up -d --no-deps --pull never "$SERVICE"; }
+
+healthy() {
+  local cid deadline state code
+  cid="$(compose ps -q "$SERVICE")"
+  [ -n "$cid" ] || return 1
+  deadline=$((SECONDS + HEALTH_TIMEOUT))
+  while [ $SECONDS -lt $deadline ]; do
+    state="$(docker inspect -f '{{ '{{' }}.State.Status{{ '}}' }}' "$cid" 2>/dev/null || echo missing)"
+    if [ "$state" != "running" ]; then
+      echo "컨테이너 상태: $state" >&2
+      return 1
+    fi
+    if [ "$SERVICE" = "ai" ]; then
+      # compose의 healthcheck 결과(/health)를 그대로 사용
+      [ "$(docker inspect -f '{{ '{{' }}.State.Health.Status{{ '}}' }}' "$cid")" = "healthy" ] && return 0
+    else
+      # Spring Security가 401/403을 돌려줘도 HTTP 응답이 오면 기동 완료로 봅니다
+      code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "http://127.0.0.1:${APP_PORT}/" || true)"
+      [ "$code" != "000" ] && [ "${code:0:1}" != "5" ] && return 0
+    fi
+    sleep 5
+  done
+  echo "${HEALTH_TIMEOUT}초 안에 정상 상태가 되지 않았습니다." >&2
+  return 1
+}
+
+echo "==> $SERVICE: ${PREV_TAG} -> ${TAG}"
+set_tag "$TAG"
+up
+
+if healthy; then
+  echo "==> $SERVICE 배포 완료 (${REPO}:${TAG})"
+  exit 0
+fi
+
+echo "==> $SERVICE 최근 로그" >&2
+compose logs --tail 80 "$SERVICE" >&2 || true
+
+if [ -n "$PREV_TAG" ] && [ "$PREV_TAG" != "$TAG" ] && docker image inspect "${REPO}:${PREV_TAG}" >/dev/null 2>&1; then
+  echo "==> 이전 태그(${PREV_TAG})로 되돌립니다" >&2
+  set_tag "$PREV_TAG"
+  up
+  healthy && echo "==> 롤백 완료 (${REPO}:${PREV_TAG})" >&2 || echo "==> 롤백 후에도 비정상입니다. 서버를 직접 확인하세요." >&2
+else
+  echo "==> 되돌릴 이전 이미지가 없습니다." >&2
+fi
+exit 1

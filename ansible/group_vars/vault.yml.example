@@ -1,0 +1,27 @@
+# 이 파일을 group_vars/vault.yml로 복사한 뒤 실제 값을 채우고,
+# 아래 명령으로 암호화해서 사용하세요. (평문으로 커밋 금지)
+#
+#   cp group_vars/vault.yml.example group_vars/vault.yml
+#   ansible-vault encrypt group_vars/vault.yml
+#
+# playbook 실행 시에는 --ask-vault-pass 옵션을 추가합니다.
+
+# RDS(계정 B) 마스터/앱 사용자 비밀번호
+vault_db_password: ""
+
+vault_jwt_secret: ""   # 생성 예: openssl rand -base64 64
+vault_redis_password: ""   # 운영 Redis 비밀번호 (필수). 생성 예: openssl rand -hex 24
+vault_verification_secret: ""   # 인증 코드 HMAC 키, 32자 이상. 생성 예: openssl rand -base64 48
+
+# 인증 메일 발송용 Gmail (Google 계정 → 보안 → 2단계 인증 → 앱 비밀번호)
+vault_mail_username: ""   # 발신 Gmail 주소
+vault_mail_password: ""   # 16자리 앱 비밀번호
+
+# ECR pull용 IAM 자격증명 (계정 A, loom-ci 사용자 — Jenkins의 ECR push 자격증명과 동일)
+vault_ecr_access_key_id: ""
+vault_ecr_secret_access_key: ""
+
+# S3 업로드용 IAM 자격증명 (계정 A, loom-app 사용자 — 앱 컨테이너에 주입)
+# ECR 키와 이름을 분리해 두었습니다(vault.yml이 all.yml보다 나중에 로드되어 덮어쓰는 문제 방지).
+vault_s3_access_key_id: ""
+vault_s3_secret_access_key: ""

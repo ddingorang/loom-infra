@@ -1,0 +1,4 @@
+---
+collections:
+  - name: community.docker    # docker_compose_v2 (server.yml)
+    version: ">=3.10.0"

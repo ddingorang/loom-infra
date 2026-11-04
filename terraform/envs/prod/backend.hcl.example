@@ -1,0 +1,3 @@
+# cp backend.hcl.example backend.hcl  (커밋 안 됨)
+bucket  = "loom-tfstate-change-me"   # bootstrap의 state_bucket_name과 동일
+profile = "loom-main"

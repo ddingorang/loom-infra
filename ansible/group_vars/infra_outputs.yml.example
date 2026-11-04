@@ -1,0 +1,4 @@
+# terraform/ apply 전 기본값(빈 값)입니다. 직접 수정할 필요 없습니다.
+# terraform/envs/prod에서 apply하면 같은 디렉토리에 infra_outputs.yml(커밋 안 됨)이 생성되고,
+# server.yml / frontend-deploy.yml은 그 파일이 있으면 그것을, 없으면 이 파일을 읽습니다.
+infra_outputs: {}

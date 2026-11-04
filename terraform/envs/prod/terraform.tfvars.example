@@ -1,0 +1,20 @@
+# cp terraform.tfvars.example terraform.tfvars  (커밋 안 됨)
+aws_account_id    = "123456789012"   # 메인 계정(A)
+aws_profile       = "loom-main"
+image_bucket_name = "loom-images-change-me"
+
+# 도메인 (Route 53 DNS + Amplify 커스텀 도메인 + api.<도메인> → EC2). 비우면 생성 안 함
+# domain_name   = "loom.example.com"
+# api_server_ip = "1.2.3.4"
+
+# 기본값을 바꿀 때만
+# ecr_repo_name      = "loom-backend"
+# ai_ecr_repo_name   = "loom-ai"
+# amplify_app_name   = "loom-frontend"
+# amplify_branch     = "main"
+# extra_cors_origins = ["http://localhost:5173", "https://loom.example.com"]
+
+# RDS 제어 (Mattermost /rds) — 둘 다 채우면 Lambda 생성
+# db_account_id          = "222222222222"     # RDS가 있는 계정(B)
+# mattermost_channel_id  = "abcd1234efgh5678ijkl9012mn"
+# db_instance_identifier = "loompostgres"

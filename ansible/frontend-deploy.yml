@@ -1,0 +1,131 @@
+---
+# 프론트엔드(React/Vite)를 빌드해 Amplify Hosting에 수동 배포(zip 업로드)합니다.
+# EC2에 접속하지 않고, 실행하는 머신(로컬 PC 또는 Jenkins)에서 바로 수행합니다.
+#
+#   ansible-playbook frontend-deploy.yml
+#
+# 필요 도구: node/npm, zip, aws CLI v2 (메인 계정 자격증명 — loom-ci 사용자 권한이면 충분)
+# 전제: terraform/ apply로 Amplify 앱/브랜치가 만들어져 있어야 합니다.
+- name: Loom - 프론트엔드 빌드 및 Amplify 배포
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+
+  vars_files:
+    - group_vars/all.yml
+    - - group_vars/infra_outputs.yml
+      - group_vars/infra_outputs.yml.example
+
+  environment: "{{ ({'AWS_PROFILE': aws_profile} if aws_profile else {}) | combine({'AWS_REGION': aws_region}) }}"
+
+  vars:
+    fe_dist_dir: "{{ frontend_src_dir }}/dist"
+    fe_build_dir: "{{ playbook_dir }}/.build"
+    fe_zip_path: "{{ fe_build_dir }}/frontend.zip"
+
+  tasks:
+    - name: Amplify 앱 ID 확인
+      assert:
+        that:
+          - amplify_app_id | length > 0
+        fail_msg: "amplify_app_id가 비어 있습니다. terraform/(envs/prod)에서 terraform apply를 먼저 실행하세요."
+
+    # ---------- 1. 빌드 ----------
+    - name: 의존성 설치 (npm ci)
+      command: npm ci
+      args:
+        chdir: "{{ frontend_src_dir }}"
+      when: frontend_build | bool
+
+    - name: 프로덕션 빌드 (npm run build)
+      command: npm run build
+      args:
+        chdir: "{{ frontend_src_dir }}"
+      environment: "{{ frontend_build_env }}"
+      when: frontend_build | bool
+
+    - name: 빌드 결과 확인 (dist/index.html)
+      stat:
+        path: "{{ fe_dist_dir }}/index.html"
+      register: fe_index
+
+    - name: 빌드 결과가 없으면 중단
+      assert:
+        that: fe_index.stat.exists
+        fail_msg: "{{ fe_dist_dir }}/index.html이 없습니다. frontend_src_dir 경로와 빌드 결과를 확인하세요."
+
+    # ---------- 2. zip 패키징 (index.html이 zip 루트에 있어야 함) ----------
+    - name: 작업 디렉토리 생성
+      file:
+        path: "{{ fe_build_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: 이전 zip 삭제
+      file:
+        path: "{{ fe_zip_path }}"
+        state: absent
+
+    - name: dist 디렉토리를 zip으로 압축
+      command: zip -r -q "{{ fe_zip_path }}" .
+      args:
+        chdir: "{{ fe_dist_dir }}"
+
+    # ---------- 3. Amplify 수동 배포 ----------
+    - name: Amplify 배포 생성 (업로드 URL 발급)
+      command: >
+        aws amplify create-deployment
+        --app-id {{ amplify_app_id }}
+        --branch-name {{ amplify_branch }}
+        --output json
+      register: amplify_create
+      changed_when: true
+
+    - name: 배포 정보 파싱
+      set_fact:
+        amplify_job_id: "{{ (amplify_create.stdout | from_json).jobId }}"
+        amplify_upload_url: "{{ (amplify_create.stdout | from_json).zipUploadUrl }}"
+
+    - name: zip 업로드 (presigned URL)
+      uri:
+        url: "{{ amplify_upload_url }}"
+        method: PUT
+        src: "{{ fe_zip_path }}"
+        headers:
+          Content-Type: application/zip
+        status_code: 200
+      no_log: true   # presigned URL 노출 방지
+
+    - name: Amplify 배포 시작 (job {{ amplify_job_id }})
+      command: >
+        aws amplify start-deployment
+        --app-id {{ amplify_app_id }}
+        --branch-name {{ amplify_branch }}
+        --job-id {{ amplify_job_id }}
+      changed_when: true
+
+    - name: 배포 완료 대기
+      command: >
+        aws amplify get-job
+        --app-id {{ amplify_app_id }}
+        --branch-name {{ amplify_branch }}
+        --job-id {{ amplify_job_id }}
+        --query job.summary.status --output text
+      register: amplify_job_status
+      until: amplify_job_status.stdout in ['SUCCEED', 'FAILED', 'CANCELLED']
+      retries: 60
+      delay: 5
+      changed_when: false
+
+    - name: 배포 성공 여부 확인
+      assert:
+        that: amplify_job_status.stdout == 'SUCCEED'
+        fail_msg: "Amplify 배포 실패 (status={{ amplify_job_status.stdout }}). Amplify 콘솔에서 job {{ amplify_job_id }} 로그를 확인하세요."
+
+    - name: 결과 출력
+      debug:
+        msg:
+          - "배포 완료 (job {{ amplify_job_id }})"
+          - "프론트 URL: {{ frontend_url }}"
+          - "빌드 환경변수: {{ frontend_build_env }}"

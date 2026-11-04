@@ -1,0 +1,5 @@
+# cp terraform.tfvars.example terraform.tfvars  (커밋 안 됨)
+db_account_id   = "222222222222"   # RDS가 있는 계정(B)
+aws_profile     = "loom-db"
+lambda_role_arn = "arn:aws:iam::123456789012:role/loom-rds-control-lambda"   # envs/prod 출력값
+# db_instance_identifier = "loompostgres"

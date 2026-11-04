@@ -1,0 +1,36 @@
+# ===== Terraform =====
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+# 환경별 값 (.example 을 복사해서 채우기)
+*.tfvars
+!*.tfvars.example
+backend.hcl
+# Lambda 패키징 산출물
+.build/
+
+# ===== Ansible (실제 값은 .example 을 복사해서 로컬에서만) =====
+ansible/group_vars/all.yml
+ansible/group_vars/vault.yml
+ansible/group_vars/infra_outputs.yml
+ansible/inventory/hosts.ini
+*.retry
+.vault_pass*
+
+# ===== 비밀 · 키 =====
+*.pem
+*.key
+.env
+
+# ===== Python =====
+__pycache__/
+*.pyc
+
+# ===== OS / 에디터 =====
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -1,0 +1,73 @@
+{# 프론트는 Amplify, 이미지는 CloudFront가 서빙하므로 이 서버는 API(/)와 Jenkins(/jenkins/)만 프록시합니다. #}
+{% macro proxy_locations() %}
+    client_max_body_size 20m;
+
+    location = /jenkins {
+        return 301 /jenkins/;
+    }
+
+    location /jenkins/ {
+        proxy_pass http://127.0.0.1:{{ jenkins_port }}/jenkins/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+        proxy_redirect http://127.0.0.1:{{ jenkins_port }}/jenkins/ $scheme://$host/jenkins/;
+        proxy_max_temp_file_size 0;
+        proxy_buffering off;
+        proxy_request_buffering off;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:{{ app_port }};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+{% endmacro %}
+{% if enable_https | bool %}
+server {
+    listen 80;
+    server_name {{ nginx_server_name }};
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+{% if https_cert_exists | default(false) | bool %}
+    location / {
+        return 301 https://$host$request_uri;
+    }
+{% else %}
+    # 인증서 발급 전(또는 발급 실패 시)에는 HTTPS로 보내지 않고 HTTP로 그대로 서비스
+{{ proxy_locations() }}
+{% endif %}
+}
+
+{% if https_cert_exists | default(false) | bool %}
+server {
+    listen 443 ssl http2;   # Ubuntu 기본 nginx(1.18/1.24)는 'http2 on;' 지시어 미지원
+    server_name {{ nginx_server_name }};
+
+    ssl_certificate     /etc/letsencrypt/live/{{ domain_name }}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{{ domain_name }}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+{{ proxy_locations() }}
+}
+{% endif %}
+{% else %}
+server {
+    listen {{ nginx_port }};
+    server_name {{ nginx_server_name }};
+
+{{ proxy_locations() }}
+}
+{% endif %}
