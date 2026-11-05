@@ -17,6 +17,15 @@ vault_verification_secret: ""   # 인증 코드 HMAC 키, 32자 이상. 생성 �
 vault_mail_username: ""   # 발신 Gmail 주소
 vault_mail_password: ""   # 16자리 앱 비밀번호
 
+# 소셜 로그인 (각 제공자 개발자 콘솔에서 발급). 아직 없는 제공자는 비워 두면 배포는 되고 해당 로그인만 실패
+# redirect URI 는 https://<프론트 도메인>/oauth/callback/{kakao|google|naver} 로 콘솔에 등록
+vault_kakao_client_id: ""        # 카카오 REST API 키
+vault_kakao_client_secret: ""    # 카카오 로그인 → 보안 → Client Secret
+vault_google_client_id: ""
+vault_google_client_secret: ""
+vault_naver_client_id: ""
+vault_naver_client_secret: ""
+
 # ECR pull용 IAM 자격증명 (계정 A, loom-ci 사용자 — Jenkins의 ECR push 자격증명과 동일)
 vault_ecr_access_key_id: ""
 vault_ecr_secret_access_key: ""

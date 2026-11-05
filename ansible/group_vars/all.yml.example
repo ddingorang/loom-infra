@@ -96,7 +96,20 @@ app_name: loom-backend
 app_port: 8080          # 127.0.0.1에만 바인딩, Nginx 경유로만 접근
 spring_profile: prod
 jwt_secret: "{{ vault_jwt_secret }}"
+verification_secret: "{{ vault_verification_secret }}"   # 인증 코드 HMAC 키 (32자 이상)
+# 인증 메일 발송 (Gmail SMTP). 비어 있으면 Spring 기동 실패
+mail_username: "{{ vault_mail_username }}"   # 발신 Gmail 주소
+mail_password: "{{ vault_mail_password }}"   # Google 앱 비밀번호 (계정 비밀번호 아님)
 cookie_secure: "true"   # HTTPS 운영 환경이므로 true. 아직 TLS 없으면 false로.
+# 소셜 로그인. vault 에 키가 없어도 배포는 되도록 default('')
+# redirect_uri = {oauth_redirect_base_uri}/{kakao|google|naver} — 제공자 콘솔 · FE 콜백과 글자까지 같아야 함
+oauth_redirect_base_uri: "{{ frontend_url }}/oauth/callback"
+kakao_client_id: "{{ vault_kakao_client_id | default('') }}"
+kakao_client_secret: "{{ vault_kakao_client_secret | default('') }}"
+google_client_id: "{{ vault_google_client_id | default('') }}"
+google_client_secret: "{{ vault_google_client_secret | default('') }}"
+naver_client_id: "{{ vault_naver_client_id | default('') }}"
+naver_client_secret: "{{ vault_naver_client_secret | default('') }}"
 
 # --- Redis (refresh token · 소셜 가입 signupToken, compose 내부 전용) ---
 # ElastiCache는 같은 VPC에서만 접속 가능한데 EC2가 SSAFY 제공 인스턴스(계정 A VPC 밖)라 쓸 수 없어 컨테이너로 운영
