@@ -146,6 +146,7 @@ AWS 리소스 이름 · ID는 여기 적지 않고 `infra_outputs.*`에서 읽�
 | `vault_verification_secret` | 인증 코드 HMAC 키, 32자 이상 (`openssl rand -base64 48`) |
 | `vault_redis_password` | 운영 Redis 비밀번호 (`openssl rand -hex 24`) |
 | `vault_mail_username` · `vault_mail_password` | 인증 메일 Gmail 주소 · 앱 비밀번호 (공백 없이) |
+| `vault_{kakao,google,naver}_client_id` · `_client_secret` | 소셜 로그인 키. **선택** — 비어 있어도 배포는 되고 그 제공자 로그인만 실패 |
 | `vault_ecr_access_key_id` · `vault_ecr_secret_access_key` | `loom-ci` 키 (ECR pull) |
 | `vault_s3_access_key_id` · `vault_s3_secret_access_key` | `loom-app` 키 (S3 업로드) |
 

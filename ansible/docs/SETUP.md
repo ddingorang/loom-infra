@@ -79,6 +79,12 @@ vault_verification_secret: ""     # openssl rand -base64 48 (32자 이상)
 vault_redis_password: ""          # openssl rand -hex 24
 vault_mail_username: ""           # 인증 메일 발신 Gmail 주소
 vault_mail_password: ""           # Gmail 앱 비밀번호 (16자리)
+vault_kakao_client_id: ""         # 소셜 로그인 (선택). 카카오 REST API 키
+vault_kakao_client_secret: ""
+vault_google_client_id: ""
+vault_google_client_secret: ""
+vault_naver_client_id: ""
+vault_naver_client_secret: ""
 vault_ecr_access_key_id: ""       # loom-ci
 vault_ecr_secret_access_key: ""
 vault_s3_access_key_id: ""        # loom-app
@@ -88,6 +94,8 @@ vault_s3_secret_access_key: ""
 ```bash
 ansible-vault encrypt group_vars/vault.yml
 ```
+
+소셜 로그인 키를 넣었다면 각 제공자 콘솔에 redirect URI `https://<프론트 도메인>/oauth/callback/{kakao|google|naver}`를 등록합니다 (글자까지 같아야 함).
 
 `loom-ci` 키는 Jenkins 자격증명(`aws-ecr-credentials` 등)에도 같은 값으로 등록합니다.
 
