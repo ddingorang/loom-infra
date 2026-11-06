@@ -7,7 +7,7 @@
 | 폴더 | 역할 | 관련 문서 |
 |---|---|---|
 | [`terraform/`](terraform) | AWS 리소스 관리 — Route 53, Amplify, S3/CloudFront, ECR, IAM, RDS 제어 Lambda | [terraform/README.md](terraform/README.md) |
-| [`ansible/`](ansible) | 서버 구성 및 배포 — Docker, Nginx(HTTPS), Jenkins, 백엔드/AI/Redis 컨테이너 | [ansible/README.md](ansible/README.md) |
+| [`ansible/`](ansible) | 서버 구성 및 배포 — Docker, Nginx(HTTPS), Jenkins, 백엔드/AI/Redis 컨테이너, 모니터링(Prometheus · Grafana) | [ansible/README.md](ansible/README.md) |
 
 애플리케이션(Spring Boot, FastAPI, React)과 Jenkinsfile은 별도의 모노레포에서 관리합니다.
 
@@ -100,6 +100,7 @@ Ansible은 해당 파일을 참조하여 서버 구성과 애플리케이션 배
 
 - 외부에 공개하는 포트는 Nginx의 HTTP(80), HTTPS(443)로 제한합니다.
 - FastAPI AI 서버와 Redis는 내부 네트워크에서만 접근할 수 있도록 구성합니다.
+- 모니터링은 Grafana만 Nginx `/grafana/` 경로로 공개하고(로그인 필수), Prometheus · exporter · 백엔드 메트릭 포트는 외부에 열지 않습니다.
 - IAM 사용자는 용도에 따라 CI/CD용(`loom-ci`)과 애플리케이션용(`loom-app`)으로 분리합니다.
 - 별도 AWS 계정의 RDS는 시작, 중지, 조회에 필요한 최소 권한만 부여한 역할을 통해 제어합니다.
 
@@ -132,7 +133,7 @@ Ansible은 해당 파일을 참조하여 서버 구성과 애플리케이션 배
 |---|---|---|---|
 | `loom.ai.kr` | Amplify Hosting | Amplify (Route 53 영역에 자동 생성) | Amplify |
 | `www.loom.ai.kr` | Amplify Hosting | Amplify (Route 53 영역에 자동 생성) | Amplify |
-| `api.loom.ai.kr` | EC2 Nginx | Terraform (`modules/dns`) | Let's Encrypt (Ansible · Certbot) |
+| `api.loom.ai.kr` | EC2 Nginx (API · `/jenkins/` · `/grafana/`) | Terraform (`modules/dns`) | Let's Encrypt (Ansible · Certbot) |
 | 이미지 | CloudFront 기본 도메인 (`*.cloudfront.net`) | 별도 도메인 레코드 없음 | CloudFront 기본 인증서 |
 
 도메인 등록은 가비아에서 진행하며, 네임서버만 Route 53으로 위임합니다.
@@ -198,6 +199,32 @@ ansible-playbook server.yml
 
 ---
 
+## 모니터링
+
+운영 EC2의 같은 compose 스택에서 Prometheus가 메트릭을 수집하고, Grafana가 대시보드와 알림을 제공합니다.
+
+```text
+백엔드  app:8081/actuator/prometheus ─┐
+AI 서버 ai:8000/metrics ───────────────┤
+node-exporter (호스트) ────────────────┼──> Prometheus ──> Grafana ──> https://api.loom.ai.kr/grafana/
+cAdvisor (컨테이너) ───────────────────┤    (15초 수집,     │
+redis-exporter ────────────────────────┘     15일 보관)     └──> Mattermost 알림
+```
+
+| 구분 | 내용 |
+|---|---|
+| 대시보드 | **Loom 개요** — API 요청 · 5xx · p95 지연, 퍼스널 컬러 진단 결과 · 소요 시간 · 동시 처리 수, 호스트 · 컨테이너 · JVM · Redis 자원. 그 외 Spring Boot · Node · cAdvisor · Redis 상세 대시보드 |
+| 알림 | 수집 대상 중단, API 5xx 비율, API p95 지연, 진단 AI 장애, 디스크, 메모리 → Mattermost |
+| 노출 | Grafana만 Nginx `/grafana/`로 공개 (로그인 필수, 익명 · 가입 차단). 나머지는 compose 내부 전용 |
+| 코드 관리 | 데이터소스 · 대시보드 · 알림을 모두 provisioning 파일(`ansible/files/grafana/`)로 관리. 화면에서 수정하지 않습니다 |
+| 자원 | 컨테이너별 메모리 상한 (Prometheus · Grafana 512m, cAdvisor 192m, exporter 64m) |
+
+애플리케이션은 비즈니스 지표도 직접 내보냅니다. 예를 들어 `loom_color_diagnosis_total{result, reason}`(진단 결과), `loom_ai_inflight`(AI 동시 추론 수), `loom_auth_mail_total`(인증 메일 발송 결과)입니다.
+
+자세한 사용법(접속, Prometheus 원본 화면 SSH 터널, 알림 기준 변경, 관리자 비밀번호 변경)은 [운영 가이드](ansible/docs/OPERATIONS.md#모니터링-prometheus--grafana)를 참고하세요.
+
+---
+
 ## 환경변수 및 설정 관리
 
 백엔드 컨테이너에 전달되는 환경변수 파일은 `/opt/loom/app.env`에 생성되며, 파일 권한은 `0600`으로 제한합니다.
@@ -208,12 +235,13 @@ Ansible은 다음 세 가지 설정 파일을 조합하여 환경변수를 구�
 |---|---|---|
 | `infra_outputs.yml` | Terraform 자동 생성 | S3 버킷, CloudFront 도메인, 프론트엔드 주소, CORS 허용 출처, OAuth Redirect URI |
 | `all.yml` | 일반 설정 | Spring 프로필, RDS 주소, AI 서버 주소, Redis 메모리 설정 |
-| `vault.yml` | Ansible Vault 암호화 | DB, JWT, 인증 코드 HMAC, Redis 비밀번호, 메일 계정, S3 키, 소셜 로그인 키 |
+| `vault.yml` | Ansible Vault 암호화 | DB, JWT, 인증 코드 HMAC, Redis 비밀번호, 메일 계정, S3 키, 소셜 로그인 키, Grafana 관리자 비밀번호 · 알림 웹훅 |
 
 **환경변수 검증**
 
 - 필수 비밀값이 누락된 경우 `server.yml` 실행 초기에 누락된 항목을 안내하고 작업을 중단합니다.
 - 소셜 로그인 키는 선택 항목으로 관리합니다. 값이 없는 경우에도 배포는 진행되며, 해당 제공자의 로그인 기능만 사용할 수 없습니다.
+- Grafana 알림 웹훅도 선택 항목입니다. 값이 없으면 알림 규칙을 배포하지 않고 대시보드만 동작합니다.
 - 백엔드에 새로운 환경변수가 추가되면 `ansible/templates/app.env.j2`, `all.yml`, `vault.yml`에도 관련 항목을 함께 반영해야 합니다.
 
 ---
@@ -239,7 +267,7 @@ Ansible은 다음 세 가지 설정 파일을 조합하여 환경변수를 구�
 |---|---|
 | [Ansible 초기 구축 가이드](ansible/docs/SETUP.md) | 인프라 초기 설정부터 서버 구성까지 전체 설치 절차 |
 | [Jenkins 설정 가이드](ansible/docs/JENKINS.md) | Jenkins 작업, 인증 정보 및 Webhook 설정 |
-| [운영 가이드](ansible/docs/OPERATIONS.md) | 배포, 롤백, 로그, AI 모델 및 Redis 관리 |
+| [운영 가이드](ansible/docs/OPERATIONS.md) | 배포, 롤백, 로그, AI 모델, Redis, 모니터링(대시보드 · 알림) 관리 |
 | [Terraform RDS 제어 가이드](terraform/README.md#rds-제어-mattermost-rds) | Mattermost `/rds` 명령어를 통한 RDS 시작 및 중지 |
 
 ---
