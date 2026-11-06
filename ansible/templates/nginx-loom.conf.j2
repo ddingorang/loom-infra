@@ -1,4 +1,4 @@
-{# 프론트는 Amplify, 이미지는 CloudFront가 서빙하므로 이 서버는 API(/)와 Jenkins(/jenkins/)만 프록시합니다. #}
+{# 프론트는 Amplify, 이미지는 CloudFront가 서빙하므로 이 서버는 API(/) · Jenkins(/jenkins/) · Grafana(/grafana/)만 프록시합니다. #}
 {% macro proxy_locations() %}
     client_max_body_size 20m;
 
@@ -21,6 +21,25 @@
         proxy_request_buffering off;
     }
 
+{% if monitoring_enabled | bool %}
+    # Grafana (S15P31A104-107). serve_from_sub_path 라 /grafana 접두사를 그대로 넘긴다. 로그인 필수 · 가입 불가
+    location = /grafana {
+        return 301 /grafana/;
+    }
+
+    location /grafana/ {
+        proxy_pass http://127.0.0.1:{{ grafana_port }};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # Grafana Live (대시보드 실시간 갱신) WebSocket
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+
+{% endif %}
     location / {
         proxy_pass http://127.0.0.1:{{ app_port }};
         proxy_http_version 1.1;

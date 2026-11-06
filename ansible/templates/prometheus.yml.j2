@@ -1,0 +1,38 @@
+# {{ ansible_managed }}
+# 수집 대상은 모두 같은 compose 네트워크의 서비스 이름으로 찾는다 (호스트 포트 없음, S15P31A104-107)
+global:
+  scrape_interval: {{ prometheus_scrape_interval }}
+  evaluation_interval: {{ prometheus_scrape_interval }}
+  external_labels:
+    env: prod
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Spring actuator 는 management 포트(8081)에만 열린다 — API 포트(8080, Nginx)로는 보이지 않음 (S15P31A104-105)
+  - job_name: loom-backend
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["app:8081"]
+{% if ai_enabled | bool %}
+
+  - job_name: loom-ai
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["ai:{{ ai_port }}"]
+{% endif %}
+
+  - job_name: node
+    static_configs:
+      - targets: ["node-exporter:9100"]
+
+  - job_name: cadvisor
+    scrape_interval: 30s   # cAdvisor housekeeping 간격과 맞춤
+    static_configs:
+      - targets: ["cadvisor:8080"]
+
+  - job_name: redis
+    static_configs:
+      - targets: ["redis-exporter:9121"]

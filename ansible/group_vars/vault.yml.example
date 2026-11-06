@@ -26,6 +26,9 @@ vault_google_client_secret: ""
 vault_naver_client_id: ""
 vault_naver_client_secret: ""
 
+# Grafana 관리자 비밀번호 (모니터링, 12자 이상). 생성 예: openssl rand -base64 18
+vault_grafana_admin_password: ""
+
 # ECR pull용 IAM 자격증명 (계정 A, loom-ci 사용자 — Jenkins의 ECR push 자격증명과 동일)
 vault_ecr_access_key_id: ""
 vault_ecr_secret_access_key: ""

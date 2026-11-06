@@ -32,6 +32,13 @@
       loop_control:
         label: "{{ item.name }}"
 
+    - name: "모니터링 설정값 확인 (monitoring_enabled 일 때)"
+      assert:
+        that: (grafana_admin_password | length) >= 12
+        fail_msg: "vault_grafana_admin_password 값을 채워주세요 (12자 이상, 현재 {{ grafana_admin_password | length }}자). 모니터링을 끄려면 monitoring_enabled: false"
+        quiet: true
+      when: monitoring_enabled | bool
+
     - name: Terraform 출력값(ECR / S3 / CloudFront) 확인
       assert:
         that:
@@ -616,6 +623,67 @@
         group: "999"
         mode: "0700"
 
+    # ---------- 8-0. 모니터링 (Prometheus · Grafana · exporter, S15P31A104-107) ----------
+    - name: prometheus.yml 배포 (수집 대상)
+      template:
+        src: templates/prometheus.yml.j2
+        dest: "{{ app_dir }}/prometheus.yml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0644"
+      register: prometheus_conf
+      when: monitoring_enabled | bool
+
+    # 컨테이너 사용자: Prometheus nobody(65534), Grafana grafana(472)
+    - name: Prometheus 데이터 디렉토리 생성
+      file:
+        path: "{{ prometheus_data_dir }}"
+        state: directory
+        owner: "65534"
+        group: "65534"
+        mode: "0755"
+      when: monitoring_enabled | bool
+
+    - name: Grafana 데이터 디렉토리 생성
+      file:
+        path: "{{ grafana_data_dir }}"
+        state: directory
+        owner: "472"
+        group: "0"
+        mode: "0755"
+      when: monitoring_enabled | bool
+
+    - name: Grafana provisioning 배포 (데이터소스 · 대시보드 · 알림을 코드로 관리)
+      copy:
+        src: files/grafana/provisioning/
+        dest: "{{ app_dir }}/grafana/provisioning/"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0644"
+        directory_mode: "0755"
+      register: grafana_provisioning
+      when: monitoring_enabled | bool
+
+    - name: grafana.env 배포 (관리자 비밀번호)
+      template:
+        src: templates/grafana.env.j2
+        dest: "{{ app_dir }}/grafana.env"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0600"
+      no_log: true
+      when: monitoring_enabled | bool
+
+    - name: redis-exporter.env 배포 (Redis 비밀번호)
+      template:
+        src: templates/redis-exporter.env.j2
+        dest: "{{ app_dir }}/redis-exporter.env"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0600"
+      no_log: true
+      when: monitoring_enabled | bool
+
     # ---------- 8-1. Jenkins 배포 스크립트 ----------
     # Jenkins는 이 스크립트 하나만 sudo로 실행해 컨테이너를 교체합니다 (env 파일 권한은 그대로 0600).
     - name: Jenkins 배포 스크립트 설치 (/usr/local/bin/loom-deploy)
@@ -648,6 +716,14 @@
       command: docker restart {{ compose_project_name }}-redis
       when: redis_conf is changed
 
+    - name: prometheus.yml 변경 시 Prometheus 재시작
+      command: docker restart {{ compose_project_name }}-prometheus
+      when: (monitoring_enabled | bool) and (prometheus_conf is changed)
+
+    - name: provisioning 변경 시 Grafana 재시작
+      command: docker restart {{ compose_project_name }}-grafana
+      when: (monitoring_enabled | bool) and (grafana_provisioning is changed)
+
     - name: 사용하지 않는 이전 이미지 정리
       community.docker.docker_prune:
         images: true
@@ -678,6 +754,7 @@
           - "API URL: {{ base_url }}"
           - "AI 서버: {{ ('내부 전용 ' + ai_base_url) if (ai_enabled | bool) else '미배포' }}"
           - "Jenkins URL: {{ base_url }}/jenkins/"
+          - "Grafana: {{ (base_url + '/grafana/ (admin / vault_grafana_admin_password)') if (monitoring_enabled | bool) else '미배포' }}"
           - "Jenkins 초기 관리자 비밀번호: {{ jenkins_initial_password.stdout | default('') or '아직 생성되지 않음(또는 이미 초기 설정 완료)' }}"
           - "이미지 CDN: {{ 'https://' + cloudfront_domain if cloudfront_domain else '(미설정)' }}"
           - "프론트(Amplify): {{ frontend_url or '(미설정)' }}"

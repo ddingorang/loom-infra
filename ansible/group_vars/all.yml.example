@@ -118,6 +118,28 @@ redis_password: "{{ vault_redis_password }}"
 redis_maxmemory: 256mb
 redis_data_dir: "{{ app_dir }}/redis-data"   # AOF 저장 위치 (컨테이너 /data)
 
+# --- 모니터링 (Prometheus · Grafana · exporter, S15P31A104-107) ---
+# Grafana 만 Nginx /grafana/ 로 공개 (로그인 필수). Prometheus · exporter 는 compose 내부 전용
+monitoring_enabled: true
+prometheus_image: prom/prometheus:v3.16.0
+grafana_image: grafana/grafana:13.3.0
+node_exporter_image: prom/node-exporter:v1.12.1
+cadvisor_image: gcr.io/cadvisor/cadvisor:v0.55.1
+redis_exporter_image: oliver006/redis_exporter:v1.97.0
+prometheus_scrape_interval: 15s
+prometheus_retention_time: 15d
+prometheus_retention_size: 5GB      # 둘 중 먼저 닿는 쪽 기준으로 오래된 데이터 삭제
+prometheus_data_dir: "{{ app_dir }}/prometheus-data"
+grafana_data_dir: "{{ app_dir }}/grafana-data"
+grafana_port: 3000                  # 127.0.0.1 에만 바인딩, Nginx 경유
+grafana_root_url: "{{ ('https://' + domain_name + '/grafana/') if domain_name else 'http://localhost/grafana/' }}"
+grafana_admin_password: "{{ vault_grafana_admin_password | default('') }}"   # 12자 이상
+# 운영 서비스(app · ai · redis) 메모리를 잠식하지 않도록 상한
+prometheus_mem_limit: 512m
+grafana_mem_limit: 256m
+cadvisor_mem_limit: 192m
+exporter_mem_limit: 64m
+
 # --- Jenkins ---
 jenkins_port: 9090
 jenkins_jdk_package: openjdk-21-jdk   # 백엔드가 Java 21

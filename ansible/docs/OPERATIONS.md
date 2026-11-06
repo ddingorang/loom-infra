@@ -46,6 +46,25 @@ refresh token · 소셜 가입 signupToken 저장소. 같은 compose 스택의 `
 - 확인: `docker exec -it loom-redis redis-cli` 접속 후 `AUTH <비밀번호>` → `PING`
 - Redis 데이터가 지워지면 모든 사용자가 다시 로그인해야 합니다 (`redis-data`를 지우지 마세요)
 
+## 모니터링 (Prometheus · Grafana)
+
+같은 compose 스택에 `loom-prometheus` · `loom-grafana` · `loom-node-exporter` · `loom-cadvisor` · `loom-redis-exporter`가 뜹니다 (S15P31A104-107).
+
+- **화면**: `https://api.loom.ai.kr/grafana/` — `admin` / vault `vault_grafana_admin_password`. 익명 접근 · 가입은 꺼져 있습니다
+- **수집 대상** (`/opt/loom/prometheus.yml`, 15초): 백엔드 `app:8081/actuator/prometheus`, AI `ai:8000/metrics`, node-exporter, cAdvisor(30초), redis-exporter
+  - 백엔드 메트릭은 management 포트(8081)에만 있고 API 포트(8080, Nginx)에는 없습니다. Prometheus · exporter는 호스트 포트를 열지 않습니다
+- **Prometheus 원본 화면** (쿼리 · Targets 상태): 외부에 공개하지 않으므로 SSH 터널로 엽니다
+  ```bash
+  ssh -L 9090:$(ssh loom-db "sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' loom-prometheus"):9090 loom-db
+  # 브라우저에서 http://localhost:9090/targets
+  ```
+- **보관**: 15일 또는 5GB 중 먼저 닿는 쪽 (`prometheus_retention_*`), 데이터는 `/opt/loom/prometheus-data`
+- **설정 변경**: `prometheus.yml` · `files/grafana/provisioning/`을 고치고 `server.yml` 재실행 → 바뀐 쪽만 재시작. 데이터소스 · 대시보드 · 알림은 Grafana 화면에서 만들지 않고 파일로 관리합니다
+- **관리자 비밀번호 변경**: `GF_SECURITY_ADMIN_PASSWORD`는 첫 기동 때만 적용됩니다. 이후에는
+  `docker exec -it loom-grafana grafana cli admin reset-admin-password '<새 비밀번호>'` 실행 후 vault 값도 같이 바꿔 두세요
+- **끄기**: `all.yml`에서 `monitoring_enabled: false` 후 `server.yml` 재실행 (컨테이너 정리, 데이터 디렉토리는 남음)
+- **자원**: 컨테이너별 `mem_limit` (Prometheus 512m · Grafana 256m · cAdvisor 192m · exporter 64m)
+
 ## 프론트엔드 (Amplify)
 
 ```bash

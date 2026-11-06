@@ -31,7 +31,9 @@ AWS 리소스 생성은 [terraform/](../terraform)이 맡고, 이 폴더는 그 
  │   ├─ /          ─> Spring Boot   127.0.0.1:8080   [loom-backend]             │
  │   │                  ├─> AI FastAPI  http://ai:8000   [loom-ai]  ── /models (가중치, 읽기 전용)
  │   │                  └─> Redis       redis:6379       [loom-redis] ── /opt/loom/redis-data (AOF)
- │   └─ /jenkins/  ─> Jenkins       127.0.0.1:9090                              │
+ │   ├─ /jenkins/  ─> Jenkins       127.0.0.1:9090                              │
+ │   └─ /grafana/  ─> Grafana       127.0.0.1:3000   [loom-grafana]             │
+ │                      └─< Prometheus [loom-prometheus] ← app:8081 · ai:8000 · exporter
  │  UFW: 22 · 80 · 443만 허용                                                   │
  └───────────────────────│──────────────────────────────────────────────────────┘
                          │ 5432 (TLS, 인터넷 경유)
@@ -48,6 +50,7 @@ AWS 리소스 생성은 [terraform/](../terraform)이 맡고, 이 폴더는 그 
 | DB | 계정 B의 RDS에 TLS로 접속 | 이미 구성된 자원. 개발과 운영이 같은 DB |
 | 프론트 | Amplify 수동 배포 (zip) | `lab.ssafy.com`은 Amplify Git 연동 미지원 |
 | CI/CD | 같은 EC2의 Jenkins | `BE-main` · `FE-main` 머지 시 자동 배포 |
+| 모니터링 | compose `prometheus` · `grafana` · `node-exporter` · `cadvisor` · `redis-exporter` | Grafana만 `/grafana/`로 공개(로그인 필수). 수집 대상 · exporter는 내부 전용. 컨테이너마다 메모리 상한 |
 
 <br>
 
@@ -96,16 +99,19 @@ ansible/
 │   ├── vault.yml                # 비밀값, ansible-vault 암호화
 │   └── infra_outputs.yml        # `terraform/`이 자동 생성 (직접 수정 금지)
 ├── templates/
-│   ├── docker-compose.yml.j2    # app · ai · redis
+│   ├── docker-compose.yml.j2    # app · ai · redis + 모니터링 스택
+│   ├── prometheus.yml.j2        # 수집 대상 (compose 서비스 이름)
+│   ├── grafana.env.j2 · redis-exporter.env.j2   # 모니터링 비밀값 (0600)
 │   ├── env.j2                   # compose 변수 (ECR 주소, 이미지 태그)
 │   ├── app.env.j2 · ai.env.j2   # 컨테이너 환경변수 (0600)
 │   ├── redis.conf.j2            # Redis 비밀번호 · AOF · noeviction (0600)
 │   ├── loom-deploy.sh.j2        # Jenkins용 교체 · 롤백 스크립트
 │   └── nginx-loom.conf.j2
+├── files/grafana/provisioning/  # Grafana 데이터소스 · 대시보드 · 알림 (코드로만 관리)
 └── docs/
     ├── SETUP.md                 # 처음 구성하는 순서 (Terraform → Ansible)
     ├── RDS.md                   # 계정 B RDS 접속 · SSL · 연결 검사
-    ├── OPERATIONS.md            # 배포 · 확인 · AI 서버 · Redis · 이미지 운영
+    ├── OPERATIONS.md            # 배포 · 확인 · AI 서버 · Redis · 모니터링 · 이미지 운영
     └── JENKINS.md               # 플러그인 · Credential · 작업 · GitLab webhook · 롤백
 ```
 
@@ -145,6 +151,7 @@ AWS 리소스 이름 · ID는 여기 적지 않고 `infra_outputs.*`에서 읽�
 | `vault_jwt_secret` | JWT 서명 키 (`openssl rand -base64 64`) |
 | `vault_verification_secret` | 인증 코드 HMAC 키, 32자 이상 (`openssl rand -base64 48`) |
 | `vault_redis_password` | 운영 Redis 비밀번호 (`openssl rand -hex 24`) |
+| `vault_grafana_admin_password` | Grafana `admin` 비밀번호, 12자 이상 (`openssl rand -base64 18`). `monitoring_enabled: true`일 때 필수 |
 | `vault_mail_username` · `vault_mail_password` | 인증 메일 Gmail 주소 · 앱 비밀번호 (공백 없이) |
 | `vault_{kakao,google,naver}_client_id` · `_client_secret` | 소셜 로그인 키. **선택** — 비어 있어도 배포는 되고 그 제공자 로그인만 실패 |
 | `vault_ecr_access_key_id` · `vault_ecr_secret_access_key` | `loom-ci` 키 (ECR pull) |

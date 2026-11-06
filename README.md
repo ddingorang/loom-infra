@@ -47,8 +47,11 @@ https://api.loom.ai.kr
 │   │                 ├──> FastAPI AI 서버 (진단 모델 마운트)       │
 │   │                 └──> Redis (AOF · 비밀번호 인증)              │
 │   │                                                              │
-│   └── /jenkins/ → Jenkins                                        │
-│                   (BE-main · FE-main 병합 시 자동 배포)           │
+│   ├── /jenkins/ → Jenkins                                        │
+│   │               (BE-main · FE-main 병합 시 자동 배포)           │
+│   │                                                              │
+│   └── /grafana/ → Grafana ◀── Prometheus ◀── 백엔드 · AI · exporter │
+│                   (대시보드 · 알림, 로그인 필수)                   │
 │                                                                  │
 └──────────────────────────┬───────────────────────────────────────┘
                            │
