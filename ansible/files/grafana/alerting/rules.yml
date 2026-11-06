@@ -1,0 +1,174 @@
+# 알림 규칙 (S15P31A104-108). 기준은 초안 — 운영하며 조정하고, 바꿀 때는 이 파일만 고친다
+# 이 파일은 Grafana 가 읽을 때 환경변수를 치환하므로 달러 기호를 쓰지 않는다 (라벨은 .Labels 로 참조)
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: loom
+    folder: Loom
+    interval: 1m
+    rules:
+      - uid: loom-target-down
+        title: 수집 대상 중단
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 120, to: 0 }
+            datasourceUid: prometheus
+            model: { refId: A, expr: "up", instant: true }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ .Labels.job }} 응답 없음 (2분 이상)"
+          description: "Prometheus 가 {{ .Labels.instance }} 를 수집하지 못합니다. 컨테이너 상태 확인: docker compose ps"
+
+      - uid: loom-api-5xx
+        title: API 5xx 비율 5% 초과
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: >-
+                sum(rate(http_server_requests_seconds_count{application="loom-backend", uri!~"UNKNOWN|/\*\*", status=~"5.."}[5m]))
+                / sum(rate(http_server_requests_seconds_count{application="loom-backend", uri!~"UNKNOWN|/\*\*"}[5m]))
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.05] }
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "API 5xx 비율 {{ with .Values.A }}{{ humanizePercentage .Value }}{{ else }}(값 없음){{ end }} (5분 지속)"
+          description: "Grafana Loom 개요 → 5xx 발생 API 패널에서 어느 API 인지 확인"
+
+      - uid: loom-api-latency
+        title: API p95 지연 2초 초과
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: >-
+                histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{application="loom-backend",
+                uri!~"UNKNOWN|/\*\*", uri!="/api/try-on/signal"}[5m])))
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [2] }
+        noDataState: OK
+        execErrState: Error
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "API p95 지연 {{ with .Values.A }}{{ humanizeDuration .Value }}{{ else }}(값 없음){{ end }} (10분 지속)"
+          description: "느린 API Top 5 패널 확인. 진단 AI 호출은 비동기라 여기에 포함되지 않음"
+
+      - uid: loom-diagnosis-ai-unavailable
+        title: 퍼스널 컬러 진단 AI 장애
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: >-
+                sum(increase(loom_color_diagnosis_total{result="FAILED", reason="AI_UNAVAILABLE"}[10m]))
+                / sum(increase(loom_color_diagnosis_total[10m]))
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.2] }
+        noDataState: OK
+        execErrState: Error
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "최근 10분 진단의 {{ with .Values.A }}{{ humanizePercentage .Value }}{{ else }}(값 없음){{ end }} 가 AI_UNAVAILABLE"
+          description: "AI 서버 장애 · 타임아웃(20초) · 동시 요청 몰림. loom-ai 로그와 동시 처리 패널 확인"
+
+      - uid: loom-host-disk
+        title: 디스크 사용률 85% 초과
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: 1 - node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.85] }
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "디스크 / 사용률 {{ with .Values.A }}{{ humanizePercentage .Value }}{{ else }}(값 없음){{ end }}"
+          description: "docker image prune · 로그 · prometheus-data 확인"
+
+      - uid: loom-host-memory
+        title: 메모리 사용률 90% 초과
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: 1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.9] }
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "호스트 메모리 사용률 {{ with .Values.A }}{{ humanizePercentage .Value }}{{ else }}(값 없음){{ end }} (5분 지속)"
+          description: "컨테이너 메모리 패널 확인. 스왑이 없어 OOM 으로 컨테이너가 종료될 수 있음"

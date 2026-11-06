@@ -134,6 +134,8 @@ grafana_data_dir: "{{ app_dir }}/grafana-data"
 grafana_port: 3000                  # 127.0.0.1 에만 바인딩, Nginx 경유
 grafana_root_url: "{{ ('https://' + domain_name + '/grafana/') if domain_name else 'http://localhost/grafana/' }}"
 grafana_admin_password: "{{ vault_grafana_admin_password | default('') }}"   # 필수 (monitoring_enabled 일 때)
+# 알림을 보낼 Mattermost 수신 웹훅 (S15P31A104-108). 비어 있으면 알림 규칙을 배포하지 않는다 (대시보드는 그대로)
+grafana_alert_webhook_url: "{{ vault_grafana_alert_webhook_url | default('') }}"
 # 운영 서비스(app · ai · redis) 메모리를 잠식하지 않도록 상한
 prometheus_mem_limit: 512m
 grafana_mem_limit: 512m          # 256m 에서는 기동 중 OOM (실측 약 370MB)

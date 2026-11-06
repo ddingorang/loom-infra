@@ -58,6 +58,22 @@ refresh token · 소셜 가입 signupToken 저장소. 같은 compose 스택의 `
   ssh -L 9090:$(ssh loom-db "sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' loom-prometheus"):9090 loom-db
   # 브라우저에서 http://localhost:9090/targets
   ```
+- **대시보드** (S15P31A104-108): Grafana `Loom` 폴더의 **Loom 개요** — 서비스 상태(UP · 요청 · 5xx · p95) · 퍼스널 컬러 진단(결과 · 소요 시간 · 동시 처리 · 실패 코드 · 메일) · 자원(호스트 · JVM · DB 커넥션 · Redis · 컨테이너).
+  `Infra` 폴더에 Spring Boot · Node Exporter · cAdvisor · Redis 대시보드 (grafana.com 에서 가져와 데이터소스 고정, 쿠버네티스 `namespace` 조건 제거)
+  - 파일: `files/grafana/provisioning/dashboards/json/<폴더>/*.json`. 화면에서 수정할 수 없고(`allowUiUpdates: false`), 고치려면 JSON 을 바꿔 `server.yml` 재실행
+  - Loom 개요는 화면에서 복제(Save as)해 실험한 뒤 JSON 모델을 복사해 파일에 반영하는 방식을 권장
+- **알림** (S15P31A104-108): `files/grafana/alerting/` → Mattermost. vault `vault_grafana_alert_webhook_url`이 있을 때만 배포되고, 비어 있으면 알림 없이 대시보드만 동작
+  | 알림 | 조건 | 등급 |
+  |---|---|---|
+  | 수집 대상 중단 | `up` < 1, 2분 | critical |
+  | API 5xx 비율 | 5% 초과, 5분 | critical |
+  | API p95 지연 | 2초 초과, 10분 (가상 착장 시그널 제외) | warning |
+  | 진단 AI 장애 | 최근 10분 진단 중 `AI_UNAVAILABLE` 20% 초과 | critical |
+  | 디스크 / | 85% 초과, 5분 | warning |
+  | 호스트 메모리 | 90% 초과, 5분 | warning |
+  - 같은 알림 · job 끼리 묶어 보내고, 해결되지 않으면 4시간마다 다시, 해결되면 해결 알림
+  - 기준을 바꾸려면 `rules.yml`만 고칩니다. 이 파일은 Grafana 가 환경변수를 치환하므로 `$` 를 쓰지 않습니다 (라벨은 `.Labels.job`)
+  - 일시 중지가 필요하면 Grafana 화면의 Silence 를 씁니다 (규칙 파일은 그대로)
 - **보관**: 15일 또는 5GB 중 먼저 닿는 쪽 (`prometheus_retention_*`), 데이터는 `/opt/loom/prometheus-data`
 - **설정 변경**: `prometheus.yml` · `files/grafana/provisioning/`을 고치고 `server.yml` 재실행 → 바뀐 쪽만 재시작. 데이터소스 · 대시보드 · 알림은 Grafana 화면에서 만들지 않고 파일로 관리합니다
 - **관리자 비밀번호 변경**: `GF_SECURITY_ADMIN_PASSWORD`는 첫 기동 때만 적용됩니다. 이후에는

@@ -1,0 +1,10 @@
+# 알림 라우팅 (S15P31A104-108). 같은 알림 · 대상끼리 묶고, 해결되지 않으면 4시간마다 다시 알린다
+apiVersion: 1
+
+policies:
+  - orgId: 1
+    receiver: loom-mattermost
+    group_by: ["alertname", "job"]
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h

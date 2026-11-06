@@ -1,0 +1,13 @@
+# 대시보드 provider (S15P31A104-108). json/<폴더>/*.json → Grafana 폴더 Loom · Infra
+# 화면에서 고칠 수 없게 하고(allowUiUpdates: false), 파일이 바뀌면 30초 안에 다시 읽는다
+apiVersion: 1
+
+providers:
+  - name: loom
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/provisioning/dashboards/json
+      foldersFromFilesStructure: true

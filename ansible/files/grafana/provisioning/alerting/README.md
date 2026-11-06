@@ -1,1 +1,1 @@
-# alerting provisioning — S15P31A104-108 에서 채움. 빈 폴더가 없으면 Grafana 가 매번 오류 로그를 남긴다
+# alerting provisioning — vault 에 알림 웹훅이 있을 때만 server.yml 이 files/grafana/alerting/ 을 여기로 복사한다

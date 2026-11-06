@@ -664,6 +664,26 @@
       register: grafana_provisioning
       when: monitoring_enabled | bool
 
+    # 알림 규칙 · 채널은 웹훅이 있을 때만 둔다 (빈 URL 채널은 Grafana provisioning 오류)
+    - name: Grafana 알림 provisioning 배포 (웹훅이 있을 때)
+      copy:
+        src: "files/grafana/alerting/{{ item }}"
+        dest: "{{ app_dir }}/grafana/provisioning/alerting/{{ item }}"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0644"
+      loop: [contact-points.yml, policies.yml, rules.yml]
+      register: grafana_alerting_on
+      when: (monitoring_enabled | bool) and (grafana_alert_webhook_url | length > 0)
+
+    - name: Grafana 알림 provisioning 제거 (웹훅이 없을 때)
+      file:
+        path: "{{ app_dir }}/grafana/provisioning/alerting/{{ item }}"
+        state: absent
+      loop: [contact-points.yml, policies.yml, rules.yml]
+      register: grafana_alerting_off
+      when: (monitoring_enabled | bool) and (grafana_alert_webhook_url | length == 0)
+
     - name: grafana.env 배포 (관리자 비밀번호)
       template:
         src: templates/grafana.env.j2
@@ -722,7 +742,9 @@
 
     - name: provisioning 변경 시 Grafana 재시작
       command: docker restart {{ compose_project_name }}-grafana
-      when: (monitoring_enabled | bool) and (grafana_provisioning is changed)
+      when: >-
+        (monitoring_enabled | bool) and
+        ((grafana_provisioning is changed) or (grafana_alerting_on is changed) or (grafana_alerting_off is changed))
 
     - name: 사용하지 않는 이전 이미지 정리
       community.docker.docker_prune:
@@ -755,6 +777,7 @@
           - "AI 서버: {{ ('내부 전용 ' + ai_base_url) if (ai_enabled | bool) else '미배포' }}"
           - "Jenkins URL: {{ base_url }}/jenkins/"
           - "Grafana: {{ (base_url + '/grafana/ (admin / vault_grafana_admin_password)') if (monitoring_enabled | bool) else '미배포' }}"
+          - "Grafana 알림: {{ 'Mattermost 로 전송' if (grafana_alert_webhook_url | length > 0) else '꺼짐 (vault_grafana_alert_webhook_url 비어 있음)' }}"
           - "Jenkins 초기 관리자 비밀번호: {{ jenkins_initial_password.stdout | default('') or '아직 생성되지 않음(또는 이미 초기 설정 완료)' }}"
           - "이미지 CDN: {{ 'https://' + cloudfront_domain if cloudfront_domain else '(미설정)' }}"
           - "프론트(Amplify): {{ frontend_url or '(미설정)' }}"

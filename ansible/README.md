@@ -151,6 +151,7 @@ AWS 리소스 이름 · ID는 여기 적지 않고 `infra_outputs.*`에서 읽�
 | `vault_jwt_secret` | JWT 서명 키 (`openssl rand -base64 64`) |
 | `vault_verification_secret` | 인증 코드 HMAC 키, 32자 이상 (`openssl rand -base64 48`) |
 | `vault_redis_password` | 운영 Redis 비밀번호 (`openssl rand -hex 24`) |
+| `vault_grafana_alert_webhook_url` | Grafana 알림을 보낼 Mattermost 수신 웹훅 (선택, 비우면 알림 없이 대시보드만) |
 | `vault_grafana_admin_password` | Grafana `admin` 비밀번호 (`openssl rand -base64 18`). `monitoring_enabled: true`일 때 필수 |
 | `vault_mail_username` · `vault_mail_password` | 인증 메일 Gmail 주소 · 앱 비밀번호 (공백 없이) |
 | `vault_{kakao,google,naver}_client_id` · `_client_secret` | 소셜 로그인 키. **선택** — 비어 있어도 배포는 되고 그 제공자 로그인만 실패 |

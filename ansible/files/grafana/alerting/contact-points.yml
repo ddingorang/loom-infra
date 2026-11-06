@@ -1,0 +1,14 @@
+# 알림 채널 (S15P31A104-108). Mattermost 수신 웹훅은 Slack 형식을 받으므로 slack 타입으로 보낸다
+# URL 은 저장소에 두지 않고 grafana.env(0600)의 LOOM_ALERT_WEBHOOK_URL 을 Grafana 가 읽을 때 치환한다
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: loom-mattermost
+    receivers:
+      - uid: loom-mattermost
+        type: slack
+        settings:
+          url: ${LOOM_ALERT_WEBHOOK_URL}
+          username: Loom 모니터링
+        disableResolveMessage: false
