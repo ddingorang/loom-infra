@@ -40,7 +40,7 @@ ai_base_url: "http://ai:{{ ai_port }}"   # 백엔드 컨테이너에 AI_BASE_URL
 ai_models_src_dir: "{{ playbook_dir }}/../../S15P31A104/ai-models"   # Ansible을 실행하는 머신 기준
 ai_models_dir: "{{ app_dir }}/ai-models"                           # 서버에 복사되는 위치
 ai_models_mount: /models                                           # 컨테이너 안 경로
-ai_color_checkpoint: convnext_base_20261028_v1/best_model.pth      # ai_models_dir 기준 상대 경로 (model_info.json 같은 폴더)
+ai_color_checkpoint: convnext_base_20261105_v2/best_model.pth      # ai_models_dir 기준 상대 경로 (model_info.json 같은 폴더)
 ai_color_device: cpu   # EC2에 GPU 없음
 
 # --- S3 + CloudFront (이미지 저장/배포) ---
