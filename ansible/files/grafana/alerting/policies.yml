@@ -1,4 +1,5 @@
 # 알림 라우팅 (S15P31A104-108). 같은 알림 · 대상끼리 묶고, 해결되지 않으면 4시간마다 다시 알린다
+# group_interval: 묶음의 다음 알림(해결 포함)은 앞 알림 후 이 간격마다 — 해결 알림은 최대 2분 늦게 온다
 apiVersion: 1
 
 policies:
@@ -6,5 +7,5 @@ policies:
     receiver: loom-mattermost
     group_by: ["alertname", "job"]
     group_wait: 30s
-    group_interval: 5m
+    group_interval: 2m
     repeat_interval: 4h

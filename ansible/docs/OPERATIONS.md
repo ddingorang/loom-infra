@@ -71,7 +71,7 @@ refresh token · 소셜 가입 signupToken 저장소. 같은 compose 스택의 `
   | 진단 AI 장애 | 최근 10분 진단 중 `AI_UNAVAILABLE` 20% 초과 | critical |
   | 디스크 / | 85% 초과, 5분 | warning |
   | 호스트 메모리 | 90% 초과, 5분 | warning |
-  - 같은 알림 · job 끼리 묶어 보내고, 해결되지 않으면 4시간마다 다시, 해결되면 해결 알림
+  - 같은 알림 · job 끼리 묶어 보내고, 해결되지 않으면 4시간마다 다시, 해결되면 해결 알림 (앞 알림 후 최대 2분 뒤 — `group_interval`)
   - 기준을 바꾸려면 `rules.yml`만 고칩니다. 이 파일은 Grafana 가 환경변수를 치환하므로 `$` 를 쓰지 않습니다 (라벨은 `.Labels.job`)
   - 일시 중지가 필요하면 Grafana 화면의 Silence 를 씁니다 (규칙 파일은 그대로)
 - **보관**: 15일 또는 5GB 중 먼저 닿는 쪽 (`prometheus_retention_*`), 데이터는 `/opt/loom/prometheus-data`
