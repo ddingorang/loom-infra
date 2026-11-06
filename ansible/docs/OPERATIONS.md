@@ -63,7 +63,7 @@ refresh token · 소셜 가입 signupToken 저장소. 같은 compose 스택의 `
 - **관리자 비밀번호 변경**: `GF_SECURITY_ADMIN_PASSWORD`는 첫 기동 때만 적용됩니다. 이후에는
   `docker exec -it loom-grafana grafana cli admin reset-admin-password '<새 비밀번호>'` 실행 후 vault 값도 같이 바꿔 두세요
 - **끄기**: `all.yml`에서 `monitoring_enabled: false` 후 `server.yml` 재실행 (컨테이너 정리, 데이터 디렉토리는 남음)
-- **자원**: 컨테이너별 `mem_limit` (Prometheus 512m · Grafana 256m · cAdvisor 192m · exporter 64m)
+- **자원**: 컨테이너별 `mem_limit` (Prometheus 512m · Grafana 512m · cAdvisor 192m · exporter 64m)
 
 ## 프론트엔드 (Amplify)
 

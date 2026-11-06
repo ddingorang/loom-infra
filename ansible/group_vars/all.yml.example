@@ -136,7 +136,7 @@ grafana_root_url: "{{ ('https://' + domain_name + '/grafana/') if domain_name el
 grafana_admin_password: "{{ vault_grafana_admin_password | default('') }}"   # 필수 (monitoring_enabled 일 때)
 # 운영 서비스(app · ai · redis) 메모리를 잠식하지 않도록 상한
 prometheus_mem_limit: 512m
-grafana_mem_limit: 256m
+grafana_mem_limit: 512m          # 256m 에서는 기동 중 OOM (실측 약 370MB)
 cadvisor_mem_limit: 192m
 exporter_mem_limit: 64m
 
