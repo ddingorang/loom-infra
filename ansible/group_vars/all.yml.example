@@ -133,7 +133,7 @@ prometheus_data_dir: "{{ app_dir }}/prometheus-data"
 grafana_data_dir: "{{ app_dir }}/grafana-data"
 grafana_port: 3000                  # 127.0.0.1 에만 바인딩, Nginx 경유
 grafana_root_url: "{{ ('https://' + domain_name + '/grafana/') if domain_name else 'http://localhost/grafana/' }}"
-grafana_admin_password: "{{ vault_grafana_admin_password | default('') }}"   # 12자 이상
+grafana_admin_password: "{{ vault_grafana_admin_password | default('') }}"   # 필수 (monitoring_enabled 일 때)
 # 운영 서비스(app · ai · redis) 메모리를 잠식하지 않도록 상한
 prometheus_mem_limit: 512m
 grafana_mem_limit: 256m

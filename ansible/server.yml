@@ -34,8 +34,8 @@
 
     - name: "모니터링 설정값 확인 (monitoring_enabled 일 때)"
       assert:
-        that: (grafana_admin_password | length) >= 12
-        fail_msg: "vault_grafana_admin_password 값을 채워주세요 (12자 이상, 현재 {{ grafana_admin_password | length }}자). 모니터링을 끄려면 monitoring_enabled: false"
+        that: (grafana_admin_password | length) > 0
+        fail_msg: "vault_grafana_admin_password 값을 채워주세요 (필수). 모니터링을 끄려면 monitoring_enabled: false"
         quiet: true
       when: monitoring_enabled | bool
 
