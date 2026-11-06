@@ -43,8 +43,8 @@ groups:
               refId: A
               instant: true
               expr: >-
-                sum(rate(http_server_requests_seconds_count{application="loom-backend", uri!~"UNKNOWN|/\*\*", status=~"5.."}[5m]))
-                / sum(rate(http_server_requests_seconds_count{application="loom-backend", uri!~"UNKNOWN|/\*\*"}[5m]))
+                sum(rate(http_server_requests_seconds_count{application="loom-backend", uri!~"UNKNOWN|/[*][*]", status=~"5.."}[5m]))
+                / sum(rate(http_server_requests_seconds_count{application="loom-backend", uri!~"UNKNOWN|/[*][*]"}[5m]))
           - refId: C
             datasourceUid: __expr__
             model:
@@ -73,7 +73,7 @@ groups:
               instant: true
               expr: >-
                 histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{application="loom-backend",
-                uri!~"UNKNOWN|/\*\*", uri!="/api/try-on/signal"}[5m])))
+                uri!~"UNKNOWN|/[*][*]", uri!="/api/try-on/signal"}[5m])))
           - refId: C
             datasourceUid: __expr__
             model:
