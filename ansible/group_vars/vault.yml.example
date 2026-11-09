@@ -26,6 +26,9 @@ vault_google_client_secret: ""
 vault_naver_client_id: ""
 vault_naver_client_secret: ""
 
+# 가상 착장 Decart API 키 (선택). 비우면 착장 세션 생성 불가
+vault_decart_api_key: ""
+
 # Grafana 관리자 비밀번호 (모니터링 켤 때 필수). 생성 예: openssl rand -base64 18
 vault_grafana_admin_password: ""
 # Grafana 알림을 보낼 Mattermost 수신 웹훅 URL (선택). 비우면 알림 없이 대시보드만

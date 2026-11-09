@@ -110,6 +110,10 @@ google_client_id: "{{ vault_google_client_id | default('') }}"
 google_client_secret: "{{ vault_google_client_secret | default('') }}"
 naver_client_id: "{{ vault_naver_client_id | default('') }}"
 naver_client_secret: "{{ vault_naver_client_secret | default('') }}"
+# 가상 착장 (Decart). vault 에 키가 없어도 배포는 되도록 default('')
+decart_api_key: "{{ vault_decart_api_key | default('') }}"
+# Decart 세션 제한이 실제 영상 · 과금을 끊는지 검증한 뒤에만 true. false 면 BE 가 착장 세션을 막는다
+decart_session_limit_verified: "false"
 
 # --- Redis (refresh token · 소셜 가입 signupToken, compose 내부 전용) ---
 # ElastiCache는 같은 VPC에서만 접속 가능한데 EC2가 SSAFY 제공 인스턴스(계정 A VPC 밖)라 쓸 수 없어 컨테이너로 운영

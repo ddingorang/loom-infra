@@ -85,6 +85,7 @@ vault_google_client_id: ""
 vault_google_client_secret: ""
 vault_naver_client_id: ""
 vault_naver_client_secret: ""
+vault_decart_api_key: ""          # 가상 착장 (선택). Decart API 키
 vault_ecr_access_key_id: ""       # loom-ci
 vault_ecr_secret_access_key: ""
 vault_s3_access_key_id: ""        # loom-app
